@@ -82,11 +82,14 @@ The stability environment retains `MALLOC_ARENA_MAX=1` and
 `BB_VK_RECORD_THREAD=0` (avoids the deferred recorder's 128-KiB assertion path).
 For DLSS, remove the old `BB_DLSS=0` override or explicitly set `BB_DLSS=1`;
 otherwise the renderer still falls back to FSR 3.1. FSR 4 also remains available.
-The verified native-source Lutris profile uses host libraries (Lutris runtime off)
-and disables the optional GameMode preload for this game only. A GameMode-enabled
-run reached DLSS initialization but stalled during scene loading; the otherwise
-matching no-GameMode run rendered the loaded scene. That comparison does not
-establish the underlying load-stall cause or a performance gain.
+The verified native-source Lutris profile uses host libraries (Lutris runtime off),
+excludes the optional GameMode preload and sets `BB_DRAW_PIPE=0`. Threaded drawing
+intermittently stopped during scene loading: the GPU command thread drained the
+draw queue while its recording worker waited on a GPU timeline. Direct drawing
+completed three consecutive private offline starts with real DLSS frames, at a
+CPU-throughput cost but without lowering image quality. Draw preparation remains
+parallel. The deeper timeline-stall cause and long-session stability are not
+established; disabling GameMode alone did not prevent the stall.
 These are machine-specific observations, not recommendations to change other
 GPUs' defaults or exceed 120 FPS.
 
