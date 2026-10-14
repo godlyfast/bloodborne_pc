@@ -12,7 +12,8 @@ import unittest
 
 
 class RestartResolutionTests(unittest.TestCase):
-    def run_restarts(self, explicit=False, live=False, ini_extra='', caps=None, bare_path=False):
+    def run_restarts(self, explicit=False, live=False, ini_extra='', caps=None, bare_path=False,
+                     save_log=False):
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory)
             # Preparation is unrelated to this test; allow the real patch compiler to
@@ -43,9 +44,12 @@ class RestartResolutionTests(unittest.TestCase):
                 'from pathlib import Path\n'
                 'config=Path(os.environ["BB_CONFIG"])\n'
                 'stage=int(os.environ.get("BB_TEST_STAGE", "0"))\n'
+                'row={key:os.environ.get(key) for key in '
+                '("BB_RENDER_RES", "BB_OUTPUT_RES", "BB_AUTO_RENDER_RES")}\n'
+                'if os.environ.get("BB_TEST_CALLER_STREAM")=="1":\n'
+                '    row["caller_stream"]=os.pread(3,4096,0).decode()\n'
                 'with (config.parent/"environments").open("a") as f:\n'
-                '    f.write(json.dumps({key:os.environ.get(key) for key in '
-                '("BB_RENDER_RES", "BB_OUTPUT_RES", "BB_AUTO_RENDER_RES")})+"\\n")\n'
+                '    f.write(json.dumps(row)+"\\n")\n'
                 'if stage<2:\n'
                 '    config.write_text("upscaler=fsr3\\npreset=4\\noutput_res="+'
                 '("1280x720" if stage==0 else "1920x1080")+"\\n")\n'
@@ -53,7 +57,9 @@ class RestartResolutionTests(unittest.TestCase):
                 '    os.execlp("bash", "bash", "run.sh")\n')
             probe.chmod(0o755)
             env = dict(os.environ, BB_PREBUILT='1', BB_PROBE=str(probe), PYTHON=str(python),
-                       BB_DATA_DIR=str(data), BB_CONFIG=str(config), BB_GAME_DIR=str(data))
+                       BB_DATA_DIR=str(data), BB_CONFIG=str(config), BB_GAME_DIR=str(data),
+                       BB_SAVE_LOG='1' if save_log else '0',
+                       BB_TEST_CALLER_STREAM='1' if save_log else '0')
             for key in ('BB_RENDER_RES', 'BB_OUTPUT_RES', 'BB_AUTO_RENDER_RES', 'BB_TEST_STAGE'):
                 env.pop(key, None)
             env.pop('BB_LIVE_RES', None)
@@ -67,7 +73,15 @@ class RestartResolutionTests(unittest.TestCase):
                 for name in ('bash', 'dirname', 'mkdir', 'realpath'):
                     (tools / name).symlink_to(shutil.which(name))
                 env['PATH'] = str(tools)
-            subprocess.run([shutil.which('bash'), 'run.sh'], cwd=ROOT, env=env,
+            command = [shutil.which('bash'), 'run.sh']
+            if save_log:
+                # A preloaded client (GameMode/D-Bus) can already own a low descriptor.
+                stream = data / 'caller-stream'
+                stream.write_text('caller-owned stream\n')
+                command = [shutil.which('bash'), '-c',
+                           'exec 3<"$1"; exec "$2" run.sh', 'caller',
+                           str(stream), shutil.which('bash')]
+            subprocess.run(command, cwd=ROOT, env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=30)
             return [json.loads(line) for line in (data / 'environments').read_text().splitlines()]
 
@@ -106,3 +120,7 @@ class RestartResolutionTests(unittest.TestCase):
         rows = self.run_restarts(explicit=True)
         self.assertEqual([row['BB_RENDER_RES'] for row in rows], ['800x450'] * 3)
         self.assertTrue(all(row['BB_AUTO_RENDER_RES'] is None for row in rows))
+
+    def test_saved_logging_preserves_an_inherited_stream(self):
+        rows = self.run_restarts(save_log=True)
+        self.assertEqual(rows[0]['caller_stream'], 'caller-owned stream\n')

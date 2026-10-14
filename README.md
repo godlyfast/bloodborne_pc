@@ -61,6 +61,14 @@ when enabling its Vulkan device extensions; hiding it caused
 does not expose host libc/GTK or require a CUDA toolkit. The regression executes
 the real dynamic loader against an isolated driver fixture.
 
+**Saved logging fix:** `run.sh` allocates its log descriptor instead of claiming
+fd 3, which a preloaded client such as GameMode can already use for D-Bus.
+Overwriting that socket caused a native launch to abort before the game started.
+Only the logger retains its new descriptor; it is closed in the parent before
+the game executes. Saved output, frame statistics and the existing GameMode hook
+remain available. An inherited-stream regression failed before the change and
+passed afterward.
+
 **Optional tested desktop profile — not global defaults:** Ryzen 9 5950X,
 RTX 4090, NVIDIA 615.71.09, 4K 60-Hz SDR display. DLSS Quality
 (`upscaler=dlss`, `preset=1`, `output_res=3840x2160`, `live_resolution=0`),
@@ -74,6 +82,11 @@ The stability environment retains `MALLOC_ARENA_MAX=1` and
 `BB_VK_RECORD_THREAD=0` (avoids the deferred recorder's 128-KiB assertion path).
 For DLSS, remove the old `BB_DLSS=0` override or explicitly set `BB_DLSS=1`;
 otherwise the renderer still falls back to FSR 3.1. FSR 4 also remains available.
+The verified native-source Lutris profile uses host libraries (Lutris runtime off)
+and disables the optional GameMode preload for this game only. A GameMode-enabled
+run reached DLSS initialization but stalled during scene loading; the otherwise
+matching no-GameMode run rendered the loaded scene. That comparison does not
+establish the underlying load-stall cause or a performance gain.
 These are machine-specific observations, not recommendations to change other
 GPUs' defaults or exceed 120 FPS.
 

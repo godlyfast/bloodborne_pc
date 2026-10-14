@@ -47,9 +47,12 @@ if [[ ${BB_SAVE_LOG:-} == 1 ]]; then
     export BB_FRAME_STATS=1 BB_FRAME_LOG=${BB_FRAME_LOG:-$logs/$stamp.frames.csv}
     export BB_READBACK_LOG=${BB_READBACK_LOG:-$logs/$stamp.readbacks.csv}
     echo "Log: $logs/$stamp.log"
-    exec 3>"$logs/$stamp.log"
+    # Preloaded clients such as GameMode can already own low descriptors (D-Bus on fd 3).
+    exec {bb_log_fd}>"$logs/$stamp.log"
     # Bash builtins only (the AppImage's PATH has no tee).
-    exec > >(while IFS= read -r line || [[ -n $line ]]; do printf '%s\n' "$line"; printf '%s\n' "$line" >&3; done) 2>&1
+    exec > >(while IFS= read -r line || [[ -n $line ]]; do printf '%s\n' "$line"; printf '%s\n' "$line" >&"$bb_log_fd"; done) 2>&1
+    # Only the logger needs this descriptor; do not carry it through game restarts.
+    exec {bb_log_fd}>&-
 fi
 if [[ -z ${PYTHON:-} ]]; then
     PYTHON=$(command -v python3 || true)

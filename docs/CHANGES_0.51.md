@@ -13,6 +13,10 @@ Questions about this project: Discord https://discord.gg/KYZRKk9CB — not the s
   notes were translated, renamed where necessary, and their links updated.
 - The paged-memory GPU regression now selects copy-shader write-through through
   the game profile, replacing its reference to a removed global shader constant.
+- Saved logging no longer overwrites an existing fd 3 (e.g. GameMode's D-Bus
+  socket). The logger allocates its own descriptor and closes the parent's copy
+  before executing the game, preserving inherited streams and avoiding restart
+  descriptor leaks.
 
 ### New
 
