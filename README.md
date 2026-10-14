@@ -31,6 +31,41 @@ and several areas of Yharnam were played with it) with sound, gamepad and saving
 A full play-through has not been verified, and only one machine (Linux, AMD Radeon RX 7800 XT,
 Mesa/RADV) has been tested thoroughly.
 
+## godlyfast fork
+
+This fork of [deadinside28/bloodborne_pc](https://github.com/deadinside28/bloodborne_pc)
+is based on native Linux **0.51**, commit `3c57da4198ad62039f63f33bfd205b9916518acf`.
+The upstream renderer, launcher defaults and build procedure are unchanged.
+
+**Local fix:** guest mutex ownership stores only 40 bits of a thread handle.
+Host `calloc` can return a higher address, so a guest can no longer recognize
+its own mutex ownership and stop making progress. Guest-thread records now use
+the existing bounded, zero-initialized `runtime_low_map` allocator. Records
+retain their original process lifetime; allocation failure does not fall back
+to an unrepresentable address. The runtime regression checks main, host-callback
+and spawned-thread handles, join results and stable host identity.
+
+The patched runtime passed its regression/contracts and a real isolated game
+startup. One offline Father Gascoigne attempt was reported crash-free; repeated
+combat, respawn and long-session stability are not established. This does not
+fix native public-shadNet login compatibility or unrelated renderer failures.
+Build/test with the existing `bash build.sh --test` and
+`python3 -m unittest discover -s tests` commands after installing the documented
+dependencies and submodules.
+
+**Optional tested desktop profile — not global defaults:** Ryzen 9 5950X,
+RTX 4090, NVIDIA 615.71.09, 4K 60-Hz SDR display. FSR 4 v07 INT8 Quality
+(`upscaler=fsr4`, `preset=1`, `output_res=3840x2160`, `live_resolution=0`),
+highest geometry (`model_lod=-2`), chromatic aberration and motion blur off,
+other effects and object motion vectors on. RCAS remains 0.50. Native rendering
+is capped at 120 FPS; title-screen telemetry is not a combat benchmark.
+The deployed launch environment retains `MALLOC_ARENA_MAX=1`,
+`BB_VK_RECORD_THREAD=0` (avoids the deferred recorder's 128-KiB assertion path)
+and `BB_DLSS=0`. Enabling the bundled DLSS bridge failed Vulkan device creation
+on this stack; selecting DLSS with that override otherwise falls back to FSR 3.1.
+FSR 4 was verified actually rendering. These are machine-specific observations,
+not recommendations to change other GPUs' defaults or exceed 120 FPS.
+
 ## Highlights
 
 - **Native execution.** The eboot is converted offline into a flat memory image; PS4 libc and

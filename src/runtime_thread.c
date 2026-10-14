@@ -78,7 +78,8 @@ static void attach(GuestThread *t) {
     current=t;
 }
 static GuestThread *new_thread(void) {
-    GuestThread *t=calloc(1,sizeof(*t));
+    /* Guest mutexes retain only 40 bits of their owning thread handle. */
+    GuestThread *t=runtime_low_map(sizeof(*t),PROT_READ|PROT_WRITE);
     if (!t) return NULL;
     t->attr=(ThreadAttr){.magic=ATTR_MAGIC,.policy=1,.prio=DEFAULT_PRIO,.stack=DEFAULT_STACK,.affinity=0x7f};
     return t;

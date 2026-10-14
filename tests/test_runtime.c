@@ -13,6 +13,7 @@ void runtime_restart(void) { abort(); }
 #include <pthread.h>
 #include <stdatomic.h>
 #include <time.h>
+#include <malloc.h>
 
 typedef int (ABI *Register)(GuestCallback);
 typedef int (ABI *RegisterCxa)(void (ABI *)(void *), void *, void *);
@@ -78,6 +79,35 @@ static void libc_support(void) {
     GET(SetHeap,"p5EcQeEeJAE#p#J")(NULL);
     assert(runtime_application_heap_api()==NULL);
     runtime_set_procparam(NULL);
+}
+static void *checked_thread_identity(void) {
+    void *identity=GET(ThreadSelf,"aI+OeCz8xrQ#p#J")();
+    assert((uintptr_t)identity>0 && (uintptr_t)identity<UINT64_C(0x10000000000));
+    return identity;
+}
+static ABI void *identity_guest_worker(void *unused) {
+    (void)unused;
+    return checked_thread_identity();
+}
+static void *identity_host_worker(void *unused) {
+    (void)unused;
+    runtime_thread_attach_host("identity-host");
+    void *identity=checked_thread_identity(), *child=NULL, *result=NULL;
+    assert(runtime_thread_spawn(&child,identity_guest_worker,NULL,65536,"identity-guest")==0);
+    assert((uintptr_t)child<UINT64_C(0x10000000000));
+    assert(runtime_thread_join_spawned(child,&result)==0 && result==child);
+    assert(checked_thread_identity()==identity);
+    return identity;
+}
+static void thread_identities(void) {
+    checked_thread_identity();
+    /* Host callbacks must remain representable even with additional libc arenas. */
+    assert(mallopt(M_ARENA_MAX,8)==1);
+    pthread_t worker;
+    assert(pthread_create(&worker,NULL,identity_host_worker,NULL)==0);
+    void *identity=NULL;
+    assert(pthread_join(worker,&identity)==0);
+    assert((uintptr_t)identity<UINT64_C(0x10000000000));
 }
 static int order[512], count;
 static Register register_plain;
@@ -417,7 +447,7 @@ int main(int argc,char **argv) {
     if (argc>1 && !strcmp(argv[1],"--rwlock-lifecycle")) { rw_lifecycle(); return 0; }
     if (argc>1 && !strcmp(argv[1],"--rwlock-concurrency")) { rw_concurrency(); return 0; }
     if (argc>1 && !strcmp(argv[1],"--rwlock-timeouts")) { rw_timeouts(); return 0; }
-    libc_support(); posix_mutexes(); wall_time(); exit_handlers(); guards(); mutexes(); direct_memory(); write_traps(); memory_primitives();
+    libc_support(); thread_identities(); posix_mutexes(); wall_time(); exit_handlers(); guards(); mutexes(); direct_memory(); write_traps(); memory_primitives();
     rw_lifecycle(); rw_concurrency(); rw_timeouts();
     puts("PASS: callback lifecycle, guard ABI, mutex errors, shared direct memory, memory primitives, resolver scope");
     return 0;
