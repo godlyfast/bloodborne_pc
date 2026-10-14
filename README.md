@@ -3,8 +3,6 @@ THIS PROJECT IS NOT RELATED TO SHADPS4. ALL QUESTIONS RELATED TO THIS PROJECT SH
 
 # bbport — a native Linux port of Bloodborne
 
-**English** · [Русский](README.ru.md)
-
 bbport is the counterpart of Wine + DXVK for a single game: *Bloodborne* for PlayStation 4
 (CUSA03173, game version 1.09) on an x86-64 Linux PC. The game's original executable runs
 directly on the PC:
@@ -35,7 +33,10 @@ Mesa/RADV) has been tested thoroughly.
 
 This fork of [deadinside28/bloodborne_pc](https://github.com/deadinside28/bloodborne_pc)
 is based on native Linux **0.51**, commit `3c57da4198ad62039f63f33bfd205b9916518acf`.
-The upstream renderer, launcher defaults and build procedure are unchanged.
+The renderer's graphics defaults and build procedure are unchanged. The launcher,
+overlay and port-owned game-menu text are English-only, independent of the system
+locale. Russian localization code and duplicate documentation were removed;
+unique Russian-only technical notes were translated without rewriting Git history.
 
 **Local fix:** guest mutex ownership stores only 40 bits of a thread handle.
 Host `calloc` can return a higher address, so a guest can no longer recognize
@@ -174,7 +175,7 @@ the graphics side.
   performs them. The game's occlusion queries (~60 a frame) are
   Vulkan occlusion queries; predication, `COPY_DATA` and `COND_EXEC` are translated too (check:
   `BB_PM4_SELFTEST=1`). Details:
-  [docs/EMULATION_REMOVAL_PLAN.ru.md](docs/EMULATION_REMOVAL_PLAN.ru.md), "Шаг 4" (Russian).
+  [docs/EMULATION_REMOVAL_PLAN.md](docs/EMULATION_REMOVAL_PLAN.md), "Step 4".
 
 "Port" here means a build for this one game, not a rewrite of its source code, which the project
 neither has nor includes.
@@ -395,7 +396,7 @@ with `BB_PRESENT_DUMP_COUNT=N` (dump N consecutive presented frames),
 `BB_FSR411_VARIANT=int8|fp8|fp8emu` (FSR 4.1.1 variant; by default FP8 where the GPU has FP8
 matrices), `BB_READBACKS=0|1|2` (reads of GPU-written memory by the game: 1 by default, 2
 precise and slow, 0 off).
-More in [docs/](docs); recent changes: [docs/CHANGES_0.4.md](docs/CHANGES_0.4.md) (in Russian),
+More in [docs/](docs); recent changes: [docs/CHANGES_0.4.md](docs/CHANGES_0.4.md),
 [docs/CHANGES_2026-10-06.md](docs/CHANGES_2026-10-06.md).
 
 **Online play (shadNet).** A separate module, `out/gpu/libbbnet.so` (`gpu/bbnet`: shadPS4's network

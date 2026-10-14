@@ -54,10 +54,7 @@ F Game(u64 va) {
 
 // ---- Texts: ids from IdBase up, looked up by the game like its own messages. ----
 constexpr u32 IdBase = 0x7f0000;
-struct Text {
-    std::u16string english, russian;
-};
-std::vector<Text> texts;
+std::vector<std::u16string> texts;
 
 std::u16string Utf16(const char* utf8) {
     std::u16string out;
@@ -83,22 +80,13 @@ std::u16string Utf16(const char* utf8) {
     }
     return out;
 }
-u32 AddText(const char* english, const char* russian) {
-    texts.push_back({Utf16(english), Utf16(russian)});
+u32 AddText(const char* english) {
+    texts.push_back(Utf16(english));
     return IdBase + u32(texts.size() - 1);
 }
-/// The game's own language decides (its "Screen/Sound" text in Cyrillic: Russian, else English);
-/// the port's menu language until the game has looked that text up.
-enum class GameLanguage { Unknown, English, Russian };
-std::atomic<GameLanguage> game_language{GameLanguage::Unknown};
 
 const char16_t* TextOf(u32 id) {
-    const Text& t = texts[id - IdBase];
-    const GameLanguage game = game_language.load();
-    const bool russian = game == GameLanguage::Unknown
-                             ? BbSettings::Get().menu_language == BbSettings::MenuLanguage::Russian
-                             : game == GameLanguage::Russian;
-    return russian ? t.russian.c_str() : t.english.c_str();
+    return texts[id - IdBase].c_str();
 }
 
 // ---- The port's values the game's rows edit (ints: the list rows bind ints). ----
@@ -173,86 +161,66 @@ struct Page {
 std::vector<Page> pages;
 
 void DefineTexts() {
-    const u32 off = AddText("Off", "Выкл"), on = AddText("On", "Вкл");
+    const u32 off = AddText("Off"), on = AddText("On");
     const std::vector<u32> toggle = {off, on};
-    const auto page = [](const char* en, const char* ru, const char* help_en, const char* help_ru) {
-        const u32 name = AddText(en, ru);
-        pages.push_back({name, AddText(help_en, help_ru), {}});
+    const auto page = [](const char* en, const char* help_en) {
+        const u32 name = AddText(en);
+        pages.push_back({name, AddText(help_en), {}});
     };
-    const auto row = [](Field f, const char* en, const char* ru, const char* help_en,
-                        const char* help_ru, std::vector<u32> choices, Kind kind = Kind::List) {
+    const auto row = [](Field f, const char* en, const char* help_en, std::vector<u32> choices,
+                        Kind kind = Kind::List) {
         if (kind == Kind::List && choices.size() == 2) {
             kind = Kind::Toggle; // left/right in place, as the game's own on/off rows
         }
-        pages.back().rows.push_back(
-            {f, AddText(en, ru), AddText(help_en, help_ru), std::move(choices), kind});
+        pages.back().rows.push_back({f, AddText(en), AddText(help_en), std::move(choices), kind});
     };
 
     // Two pages of the ControllSetting layout's six rows (the game's other layouts are fixed
     // forms): the picture, then the game's effects. The other patches (intros, the free camera,
     // the debug menu) and the game's own AA are in the overlay menu and the launcher.
-    page("Display", "Изображение", "Resolution, upscaler, sharpness and model detail (bbport)",
-         "Разрешение, апскейлер, резкость и детализация (bbport)");
+    page("Display", "Resolution, upscaler, sharpness and model detail (bbport)");
     // Sliders and toggles first, the pop-up list last: a list opens downwards over the rows
     // below it, and their values showed through it.
-    row(Preset, "Quality preset", "Пресет",
+    row(Preset, "Quality preset",
         "Scene resolution: 0-1 Native AA, 2-3 Quality, 4-6 Balanced, 7-8 Performance, 9-10 Ultra",
-        "Разрешение сцены: 0-1 Native AA, 2-3 Quality, 4-6 Balanced, 7-8 Performance, 9-10 Ultra",
-        {AddText("Native AA", "Native AA"), AddText("Quality", "Quality"), AddText("Balanced", "Balanced"),
-         AddText("Performance", "Performance"), AddText("Ultra Performance", "Ultra Performance")},
+        {AddText("Native AA"), AddText("Quality"), AddText("Balanced"), AddText("Performance"),
+         AddText("Ultra Performance")},
         Kind::Steps);
-    row(Sharpness, "Sharpness", "Резкость", "RCAS after the upscaler: 0 off, 10 strongest",
-        "RCAS после апскейлера: 0 выкл, 10 сильнее всего", {}, Kind::Slider);
-    row(OutputRes, "Output resolution", "Разрешение вывода",
+    row(Sharpness, "Sharpness", "RCAS after the upscaler: 0 off, 10 strongest", {}, Kind::Slider);
+    row(OutputRes, "Output resolution",
         "Final frame: 0-1 1280x720, 2-4 1920x1080, 5-7 2560x1440, 8-10 3840x2160",
-        "Готовый кадр: 0-1 1280x720, 2-4 1920x1080, 5-7 2560x1440, 8-10 3840x2160",
-        {AddText("1280 x 720", "1280 x 720"), AddText("1920 x 1080", "1920 x 1080"),
-         AddText("2560 x 1440", "2560 x 1440"), AddText("3840 x 2160", "3840 x 2160")},
+        {AddText("1280 x 720"), AddText("1920 x 1080"), AddText("2560 x 1440"),
+         AddText("3840 x 2160")},
         Kind::Steps);
-    row(ShowFps, "FPS counter", "Счётчик FPS", "Frame rate in the top right corner",
-        "Частота кадров в правом верхнем углу", toggle);
-    row(ModelLod, "Model detail", "Детализация",
+    row(ShowFps, "FPS counter", "Frame rate in the top right corner", toggle);
+    row(ModelLod, "Model detail",
         "After a restart: 0-1 highest, 2-4 game default, 5-7 lower, 8-10 lowest",
-        "После перезапуска: 0-1 максимальная, 2-4 как в игре, 5-7 ниже, 8-10 минимальная",
-        {AddText("Highest", "Максимальная"), AddText("Game default", "Как в игре"),
-         AddText("Lower", "Ниже"), AddText("Lowest", "Минимальная")},
+        {AddText("Highest"), AddText("Game default"), AddText("Lower"), AddText("Lowest")},
         Kind::Steps);
     // The page's only pop-up list, last: it opens below itself.
-    row(Upscaler, "Upscaler", "Апскейлер", "Temporal upscaler and anti-aliasing",
-        "Временной апскейлер и сглаживание",
-        {off, AddText("FSR 3.1", "FSR 3.1"), AddText("FSR 4", "FSR 4"), AddText("FSR 4.1.1", "FSR 4.1.1"),
-         AddText("TAA", "TAA"), AddText("DLSS", "DLSS")});
+    row(Upscaler, "Upscaler", "Temporal upscaler and anti-aliasing",
+        {off, AddText("FSR 3.1"), AddText("FSR 4"), AddText("FSR 4.1.1"), AddText("TAA"),
+         AddText("DLSS")});
 
-    page("Effects", "Эффекты", "The game's effects (bbport; after a restart)",
-         "Эффекты игры (bbport; после перезапуска)");
+    page("Effects", "The game's effects (bbport; after a restart)");
 
     // Short names for the game's narrow name column (BbSettings::Effects order); the help line
     // has the details.
     struct Short {
-        const char *key, *en, *ru, *help_en, *help_ru;
+        const char *key, *en, *help_en;
         bool graphics = true;
     };
     static const Short shorts[] = {
-        {"effect_chromatic_aberration", "Chromatic aberration", "Хром. аберрация",
-         "Colour fringes at the frame edges", "Цветные каймы по краям кадра"},
-        {"effect_dof", "Depth of field", "Глубина резкости", "Blur of distant and near objects (DoF)",
-         "Размытие дальних и близких объектов (DoF)"},
-        {"effect_motion_blur", "Motion blur", "Размытие в движении", "Blur when the camera turns",
-         "Размытие при повороте камеры"},
-        {"effect_ssao", "Ambient occlusion", "Затенение SSAO", "Shading in corners and contacts (SSAO)",
-         "Затенение в углах и местах касания (SSAO)"},
-        {"effect_game_aa", "Game's own AA", "Сглаживание игры", "The game's own anti-aliasing",
-         "Собственное сглаживание игры", false},
-        {"effect_dynamic_shadows", "Dynamic shadows", "Динамические тени", "Shadows from dynamic lights",
-         "Тени от динамических источников света"},
-        {"effect_ssr", "SSR reflections", "Отражения SSR", "Screen-space reflections (not in the original)",
-         "Экранные отражения (не было в оригинале)"},
-        {"skip_intro", "Skip intros", "Пропуск заставок", "Skip the startup logos and intro",
-         "Пропуск логотипов и заставки при запуске", false},
-        {"debug_camera", "Free camera", "Свободная камера", "Toggled with Cross + L3",
-         "Включается Cross + L3", false},
-        {"debug_menu", "Debug menu", "Debug menu", "The game's debug menu (requires font files)",
-         "Отладочное меню игры (нужны файлы шрифтов)", false},
+        {"effect_chromatic_aberration", "Chromatic aberration", "Colour fringes at the frame edges"},
+        {"effect_dof", "Depth of field", "Blur of distant and near objects (DoF)"},
+        {"effect_motion_blur", "Motion blur", "Blur when the camera turns"},
+        {"effect_ssao", "Ambient occlusion", "Shading in corners and contacts (SSAO)"},
+        {"effect_game_aa", "Game's own AA", "The game's own anti-aliasing", false},
+        {"effect_dynamic_shadows", "Dynamic shadows", "Shadows from dynamic lights"},
+        {"effect_ssr", "SSR reflections", "Screen-space reflections (not in the original)"},
+        {"skip_intro", "Skip intros", "Skip the startup logos and intro", false},
+        {"debug_camera", "Free camera", "Toggled with Cross + L3", false},
+        {"debug_menu", "Debug menu", "The game's debug menu (requires font files)", false},
     };
     for (int e = 0; e < BbSettings::EffectCount; ++e) {
         const auto& effect = BbSettings::Effects[e];
@@ -264,11 +232,8 @@ void DefineTexts() {
             continue; // the overlay menu and the launcher have it
         }
         // A new effect without a short name: its full label.
-        const std::string help_en = std::string(name ? name->help_en : effect.label) + " (after a restart)";
-        const std::string help_ru =
-            std::string(name ? name->help_ru : effect.label_ru) + " (после перезапуска)";
-        row(Field(FirstEffect + e), name ? name->en : effect.label, name ? name->ru : effect.label_ru,
-            help_en.c_str(), help_ru.c_str(), toggle);
+        const std::string help = std::string(name ? name->help_en : effect.label) + " (after a restart)";
+        row(Field(FirstEffect + e), name ? name->en : effect.label, help.c_str(), toggle);
     }
 }
 
@@ -458,12 +423,7 @@ const char16_t* LookupHook(void* repository, u32 table, u32 category, u32 id) {
                     (unsigned long long)(reinterpret_cast<u64>(__builtin_return_address(0)) - image_base));
     }
     if (category == TextName && id == ScreenSoundItem && text) {
-        screen_sound_text = text;
-        bool cyrillic = false;
-        for (const char16_t* c = text; *c; ++c) {
-            cyrillic = cyrillic || (*c >= 0x400 && *c < 0x500);
-        }
-        game_language = cyrillic ? GameLanguage::Russian : GameLanguage::English;
+        screen_sound_text = text; // the port's pages follow the game's "Screen/Sound" item
     }
     return text;
 }

@@ -1,434 +1,447 @@
-# Изменения после 0.4 (с 2026-10-08)
+# Changes after 0.4 (since 2026-10-08)
 
-Замеры — RX 7800 XT / RADV, Кошмар охотника у лампы (сохранение пользователя), 1080p без лимита
-FPS, новая модель (`BB_PC_MODEL=1`); «4 ядра» — `CPUS=0-3,8-11` (4 ядра / 8 потоков).
-Подробности и что осталось — [EMULATION_REMOVAL_PLAN.ru.md](EMULATION_REMOVAL_PLAN.ru.md),
-«Шаг 3».
+Measurements — RX 7800 XT / RADV, Hunter's Dream at the lamp (user's save), 1080p with no FPS
+limit, new model (`BB_PC_MODEL=1`); "4 cores" — `CPUS=0-3,8-11` (4 cores / 8 threads).
+Details and what remains — [EMULATION_REMOVAL_PLAN.md](EMULATION_REMOVAL_PLAN.md),
+"Step 3".
 
-## Метки EOP/EOS пишет видеочип (новая модель)
+## EOP/EOS labels written by the GPU (new model)
 
-- `EVENT_WRITE_EOP` без прерывания, `EVENT_WRITE_EOS` и `RELEASE_MEM` очередей compute:
-  буферный маркер Vulkan (`VK_AMD_buffer_marker`, конец конвейера) прямо в память игры, в той же
-  точке потока, где их пишет командный процессор PS4. Раньше каждую метку писал поток процессора
-  после завершения всей отправки Vulkan — ~330 меток за кадр, 61 тыс. в секунду.
-- 64-битная метка — две 32-битные записи, старшая половина первой (кто видит новую младшую,
-  видит и новую старшую).
-- Метки с прерыванием, а также без `VK_AMD_buffer_marker` (NVIDIA) и с `BB_FREE_CHECK=1` — как
-  раньше. `BB_GPU_LABELS=0` — как раньше везде.
-- EOS с записью из GDS: копия видеочипом в порядке потока вместо ожидания всего видеочипа
-  (`Finish()`) и записи процессором.
-- Статистика: строка `EOP fences` показывает, сколько меток за кадр записал видеочип.
-- FPS тот же (16 потоков: 233; 4 ядра: ~217 против ~215), картинка та же; 8 минут ходьбы — см.
-  ниже.
+- `EVENT_WRITE_EOP` without interrupt, `EVENT_WRITE_EOS` and `RELEASE_MEM` of the compute
+  queues: a Vulkan buffer marker (`VK_AMD_buffer_marker`, end of pipeline) straight into game
+  memory, at the same point in the stream where the PS4 command processor writes them. Previously
+  each label was written by the CPU thread after all Vulkan submission finished — ~330 labels per
+  frame, 61 thousand per second.
+- The 64-bit label — two 32-bit writes, high half first (whoever sees the new low half also sees
+  the new high one).
+- Labels with an interrupt, as well as without `VK_AMD_buffer_marker` (NVIDIA) and with
+  `BB_FREE_CHECK=1` — as before. `BB_GPU_LABELS=0` — as before everywhere.
+- EOS with a GDS write: a GPU copy in stream order instead of waiting for the whole GPU
+  (`Finish()`) and writing from the CPU.
+- Statistics: the `EOP fences` line shows how many labels per frame the GPU wrote.
+- FPS the same (16 threads: 233; 4 cores: ~217 vs ~215), picture the same; 8 minutes of walking —
+  see below.
 
-## Перехваты кода игры без ловушек
+## Game code hooks without traps
 
-- Точки, где игра выделяет память GPU (аллокатор диапазонов, три места кучи) и где загрузчики
-  копируют ресурсы (`memcpy`), раньше были `int3`: каждый вызов — сигнал ядра (SIGTRAP), ~1200
-  в секунду только у аллокатора. Теперь переход в заглушку рядом с образом игры: заглушка
-  вызывает обработчик и выполняет перекрытые инструкции; вызов `memcpy` идёт через трамплин.
-- Байты переписываются поверх уже стоящего `int3` (поток, наткнувшийся на него в этот момент,
-  уходит в заглушку). `BB_GUEST_HOOK_TRAPS=1` — ловушки, как раньше. Диагностические точки
-  (`BB_FRAME_STATS`, `BB_HEAP_SITES`) остались ловушками.
+- The points where the game allocates GPU memory (the range allocator, three heap sites) and
+  where loaders copy resources (`memcpy`) used to be `int3`: each call — a kernel signal (SIGTRAP),
+  ~1200 per second for the allocator alone. Now a jump to a stub near the game image: the stub
+  calls the handler and executes the overwritten instructions; the `memcpy` call goes through a
+  trampoline.
+- The bytes are overwritten on top of the `int3` already in place (a thread hitting it at that
+  moment goes to the stub). `BB_GUEST_HOOK_TRAPS=1` — traps, as before. The diagnostic points
+  (`BB_FRAME_STATS`, `BB_HEAP_SITES`) remain traps.
 
-## Новая модель памяти на NVIDIA
+## New memory model on NVIDIA
 
-- Новый способ отдать память игры видеочипу — импорт памяти хоста
-  (`VK_EXT_external_memory_host`): кусок прямой памяти остаётся в memfd рантайма, видеочип
-  импортирует его второе отображение. Процессор работает с обычной кэшируемой памятью, видеочип —
-  через шину, как с upload heap игры для ПК. Освобождённая память в таких кусках обнуляется, а не
-  выбрасывается из memfd (видеочип держит эти страницы).
-- При запуске самопроверка в точности как в работе: импорт куска memfd, привязка к sparse-буферу,
-  запись видеочипом — чтение процессором через другое отображение, запись процессором — копия
-  видеочипом; sparse-буфер для такой памяти должен принимать и VRAM. Не прошла — dma-buf (на
-  NVIDIA — «кусок на выделение»), для которого теперь меряется скорость чтения процессором через
-  отображение драйвера (меньше 1 ГБ/с — не используется: код игры работает на этой памяти). Не
-  прошло и это — старая модель. В журнале: `Guest memory: host memory imported by the GPU`,
-  `host memory import does not work here: …`, `CPU reads through the driver's dma-buf: N MB/s`.
-- Порядок: на AMD — dma-buf (как раньше; RADV не импортирует memfd —
-  `ErrorInvalidExternalHandle`, проверено), на остальных — сначала импорт. `BB_GUEST_MEMORY=host`
-  или `dmabuf` выбирает сам.
-- Арена (sparse-буфер памяти игры) создаётся с тем типом внешней памяти, который выбран; если
-  драйвер с ним не пускает в арену VRAM — старая модель с сообщением в журнале.
-- Лаунчер: переключатель *Новая модель памяти и трансляции* доступен на AMD и NVIDIA (тексты на
-  трёх языках). Без лаунчера — `BB_PC_MODEL=1`.
-- **На NVIDIA не проверено** (у автора только AMD): нужен журнал с NVIDIA.
+- A new way to hand the game's memory to the GPU — host memory import
+  (`VK_EXT_external_memory_host`): a piece of direct memory stays in the runtime's memfd, the GPU
+  imports its second mapping. The CPU works with ordinary cacheable memory, the GPU — across the
+  bus, as with a PC game's upload heap. Freed memory in such chunks is zeroed rather than
+  discarded from the memfd (the GPU holds those pages).
+- At startup, a self-check exactly as in operation: import a memfd chunk, bind it to a sparse
+  buffer, GPU write — CPU read through the other mapping, CPU write — GPU copy; the sparse buffer
+  for such memory must also accept VRAM. If it fails — dma-buf (on NVIDIA — "one chunk per
+  allocation"), for which the CPU read speed through the driver's mapping is now measured (below
+  1 GB/s — not used: game code runs on this memory). If that fails too — the old model. In the
+  log: `Guest memory: host memory imported by the GPU`, `host memory import does not work here:
+  …`, `CPU reads through the driver's dma-buf: N MB/s`.
+- Order: on AMD — dma-buf (as before; RADV does not import memfd — `ErrorInvalidExternalHandle`,
+  verified), on the rest — import first. `BB_GUEST_MEMORY=host` or `dmabuf` forces the choice.
+- The arena (the sparse buffer of game memory) is created with whichever external memory type is
+  chosen; if the driver doesn't let VRAM into the arena with it — the old model with a message in
+  the log.
+- Launcher: the *New memory and translation model* switch is available on AMD and NVIDIA (texts in
+  three languages). Without the launcher — `BB_PC_MODEL=1`.
+- **Not tested on NVIDIA** (the author only has AMD): a log from NVIDIA is needed.
 
-## Диагностика
+## Diagnostics
 
-- `BB_DCB_STATS=1`: кроме структуры буферов команд — пакеты PM4 в секунду по типам, события
-  `EVENT_WRITE` по типам, EOP по источнику данных и прерыванию, EOS по команде, `WAIT_REG_MEM` по
-  месту и движку, и чем закончились ожидания (метка VO, метка в порядке потока, выполнено сразу,
-  ждали — и сколько мс в секунду).
+- `BB_DCB_STATS=1`: besides the command buffer structure — PM4 packets per second by type,
+  `EVENT_WRITE` events by type, EOP by data source and interrupt, EOS by command, `WAIT_REG_MEM`
+  by location and engine, and how the waits ended (VO label, in-stream-order label, already done,
+  waited — and how many ms per second).
 
-## Шейдер копирования игры: записи остаются в памяти игры; трансляция вместо подмены — по выбору
+## Game copy shader: writes stay in game memory; translation instead of substitution — optional
 
-- Вычислительный шейдер копирования игры (`cs fefebf9f`, 2–50 запусков за кадр) выполнялся
-  подменой: процессор при записи команд читал список копий из памяти игры и делал копии своим
-  шейдером. Теперь его можно транслировать как есть (`BB_COPY_SHADER_NATIVE=1`, только новая
-  модель): список читает видеочип во время выполнения, как на PS4.
-- Найдено: рядом с тем, куда он копирует, лежат код шейдеров и таблицы описателей, которые наш
-  транслятор читает процессором. Пока эти блоки в памяти игры, всё верно; копия в VRAM (правило
-  «видеочип пишет это 3 кадра из 60») давала транслятору устаревший код — чёрная сцена. Подмена
-  держала их в памяти игры случайно (её диапазоны каждый раз разные). Теперь записи этого шейдера
-  в обоих режимах остаются в памяти игры (`force_writes_in_place`).
-- По умолчанию — подмена: родной шейдер на 4 ядрах стоит потоку записи отрисовок ~0,3 мкс на
-  пакет (+10 %), видеочипу +2 %. Бит 2 второго числа `BB_TOGGLE_FILE` переключает на ходу.
+- The game's copy compute shader (`cs fefebf9f`, 2–50 dispatches per frame) was executed by
+  substitution: while recording commands the CPU read the copy list from game memory and made the
+  copies with its own shader. Now it can be translated as-is (`BB_COPY_SHADER_NATIVE=1`, new model
+  only): the GPU reads the list at execution time, as on PS4.
+- Found: next to where it copies lie shader code and descriptor tables that our translator reads
+  from the CPU. While those blocks are in game memory, everything is correct; a copy in VRAM (the
+  "GPU writes this 3 frames out of 60" rule) gave the translator stale code — a black scene. The
+  substitution kept them in game memory by accident (its ranges are different every time). Now
+  this shader's writes stay in game memory in both modes (`force_writes_in_place`).
+- By default — substitution: the native shader on 4 cores costs the draw-recording thread ~0,3 µs
+  per packet (+10 %), the GPU +2 %. Bit 2 of the second number of `BB_TOGGLE_FILE` toggles it on
+  the fly.
 
-## Константы на месте (по выбору) и привязка буферов
+## Constants in place (optional) and buffer binding
 
-- `BB_CONSTANTS_IN_PLACE=1` (новая модель): маленькие буферы только для чтения (константы)
-  видеочип читает прямо из памяти игры, а не из копии, сделанной при разборе (кольцо констант) или
-  при записи (стрим-буфер). Копии защищали отрисовку от записей командного процессора, которые
-  процессор выполнял «наперёд»; в новой модели эти записи выполняет видеочип в порядке потока,
-  так что копия больше не нужна для правильности. Замер (4 ядра, у лампы): разбор −0,8 мкс на
-  отрисовку, видеочип +3 % (константы идут по PCIe), FPS тот же — поэтому выключено по умолчанию.
-  Бит 1 второго числа `BB_TOGGLE_FILE` переключает на ходу.
-- Привязка буфера только для чтения, уже лежащего в памяти игры, запоминается до изменения
-  резидентности (без обхода блоков на каждую привязку); проверки «на месте ли буфер» для
-  диагностики `BB_TRACE_SHADER` больше не выполняются, когда она выключена (были две на привязку).
+- `BB_CONSTANTS_IN_PLACE=1` (new model): small read-only buffers (constants) are read by the GPU
+  straight from game memory instead of a copy made at parse time (the constant ring) or at record
+  time (the stream buffer). The copies protected the draw from command processor writes that the
+  CPU executed "ahead"; in the new model those writes are executed by the GPU in stream order, so
+  the copy is no longer needed for correctness. Measurement (4 cores, at the lamp): parse −0,8 µs
+  per draw, GPU +3 % (constants travel over PCIe), FPS the same — hence off by default. Bit 1 of
+  the second number of `BB_TOGGLE_FILE` toggles it on the fly.
+- The binding of a read-only buffer already residing in game memory is remembered until residency
+  changes (no block walk on every bind); the "is the buffer in place" checks for the
+  `BB_TRACE_SHADER` diagnostics are no longer performed when it is off (there were two per bind).
 
-## Исправление
+## Fix
 
-- Реестр обработчиков ошибок доступа к памяти терял обработчик с тем же приоритетом, что у уже
-  зарегистрированного (множество упорядочивалось только по приоритету). Порядок теперь явный:
-  диагностическая ловушка VRAM, менеджер страниц, SRT walker.
+- The memory access fault handler registry lost a handler with the same priority as an already
+  registered one (the set was ordered only by priority). The order is now explicit: VRAM
+  diagnostic trap, page manager, SRT walker.
 
-## Диагностика (новая)
+## Diagnostics (new)
 
-- `BB_RES_STATS=1`: откуда шейдеры берут описатели ресурсов — из регистров или из таблиц в памяти
-  (SRT walker), по видам, на привязку.
-- `BB_VRAM_ACCESS_TRAP=1` (+ `BB_VRAM_TRAP_RANGE=адрес,размер`): блоки памяти игры, перенесённые
-  в VRAM, закрываются от процессора; печатаются места кода, которые к ним обращаются (кто читает
-  устаревшую копию).
-- `BB_WATCH=адрес,размер`: что транслятор читает из диапазона (указатели в пользовательских
-  данных, буферы, код шейдеров). `BB_TRACE_ADDR=адрес,размер` (с `BB_TRACE_SIZE`): привязки над
-  диапазоном с самого начала. `BB_TILE_BACK_LOG=1`: образы, записанные обратно в память, потому
-  что их читают как текстурный буфер. `BB_COPY_SHADER_TRACE=1`: буферы шейдера копирования.
+- `BB_RES_STATS=1`: where shaders take resource descriptors from — registers or tables in memory
+  (SRT walker), by kind, per bind.
+- `BB_VRAM_ACCESS_TRAP=1` (+ `BB_VRAM_TRAP_RANGE=address,size`): game memory blocks moved to VRAM
+  are closed off from the CPU; the code locations accessing them are printed (who reads the stale
+  copy).
+- `BB_WATCH=address,size`: what the translator reads from the range (pointers in user data,
+  buffers, shader code). `BB_TRACE_ADDR=address,size` (with `BB_TRACE_SIZE`): binds over the range
+  from the very beginning. `BB_TILE_BACK_LOG=1`: images written back to memory because they are
+  read as a texture buffer. `BB_COPY_SHADER_TRACE=1`: copy shader buffers.
 
-## Occlusion-запросы игры — настоящие запросы Vulkan (новая модель)
+## Game occlusion queries — real Vulkan queries (new model)
 
-- Bloodborne делает около 60 occlusion-запросов за кадр (`ZPASS_DONE`); раньше они получали
-  фиктивную последовательность «всё видно». Теперь сэмплы считают запросы Vulkan, а результаты
-  записывает видеочип в память игры в формате PS4 (счётчики блоков глубины с битом готовности).
-  Проходы рендера не разрываются: запрос режется на границах проходов и буферов команд, запись
-  результатов откладывается до ближайшей точки вне прохода и делается одним запуском шейдера. На
-  4 ядрах разница с фиктивным счётчиком — в пределах шума. `BB_OCCLUSION_QUERIES=0` — как раньше.
-- `COPY_DATA` (константы, регистры, часы, память, GDS) — записи и копии видеочипа в порядке потока;
-  `COND_EXEC` — условие по метке в порядке потока или после работы видеочипа до пакета;
-  `SET_PREDICATION` (ZPass, Bool64/32) — отрисовки и запуски с битом предиката пропускаются, если
-  предикат не выполнен. Bloodborne последние три не использует; это для переноса других игр.
-- `BB_PM4_SELFTEST=1`: самопроверка всего этого в работающей игре (8 проверок, печатает PASS/FAIL).
-- Исправлена взаимоблокировка при чтении процессором данных видеочипа из потока разбора.
+- Bloodborne does about 60 occlusion queries per frame (`ZPASS_DONE`); previously they got a
+  dummy "everything visible" sequence. Now samples are counted by Vulkan queries, and the results
+  are written by the GPU into game memory in PS4 format (depth block counters with a ready bit).
+  Render passes are not broken: the query is split at pass and command buffer boundaries, result
+  writes are deferred to the nearest point outside a pass and done in a single shader dispatch. On
+  4 cores the difference from the dummy counter is within noise. `BB_OCCLUSION_QUERIES=0` — as
+  before.
+- `COPY_DATA` (constants, registers, clocks, memory, GDS) — GPU writes and copies in stream order;
+  `COND_EXEC` — a condition on an in-stream-order label or on GPU work up to the packet;
+  `SET_PREDICATION` (ZPass, Bool64/32) — draws and dispatches with a predicate bit are skipped if
+  the predicate is false. Bloodborne does not use the last three; this is for porting other games.
+- `BB_PM4_SELFTEST=1`: a self-check of all this in a running game (8 checks, prints PASS/FAIL).
+- Fixed a deadlock when the CPU reads GPU data from the parse thread.
 
-## Шейдер копирования игры — по умолчанию как есть
+## Game copy shader — as-is by default
 
-- Шейдер копирования игры (`cs fefebf9f`, ~36 запусков за кадр) теперь по умолчанию переводится и
-  выполняется сам: список копий читает видеочип. `BB_COPY_SHADER_NATIVE=0` — прежняя подмена (список
-  читает процессор). Цена на 4 ядрах — +6 % к потоку записи отрисовок, видеочип и FPS те же.
-- Чтобы цена была такой: запись видеочипа в память ищет затронутую текстуру только по первому байту
-  (нужна лишь текстура, начинающаяся с этого адреса; раньше обходился весь диапазон под мьютексом), а
-  запись поверх страниц, которые процессор не менял и которые уже помечены как данные видеочипа,
-  проходит без блокировки трекера.
-- Подмены «копирование текстуры через буферы» и «очистка текстуры через буфер» оставлены: путь через
-  память (выгрузить отрисованный кадр в память, выполнить шейдер игры, перезалить текстуру) сейчас
-  даёт застывшую картинку — содержимое целей рендера не доходит до памяти игры, а при рендере сцены в
-  пониженном разрешении его там и нет. `BB_HLE_OFF=1|2|4` — опыт с отключением подмен,
-  `BB_HLE_STATS=1` — сколько раз они срабатывают (~4, ~15 и ~10 за кадр).
-- Опыт `BB_GUEST_VRAM=1`: вся память игры в VRAM через Resizable BAR — 16 FPS уже в меню (процессор
-  читает её через PCIe), не годится.
+- The game copy shader (`cs fefebf9f`, ~36 dispatches per frame) is now translated and executed by
+  itself by default: the GPU reads the copy list. `BB_COPY_SHADER_NATIVE=0` — the previous
+  substitution (the CPU reads the list). The cost on 4 cores — +6 % to the draw-recording thread,
+  GPU and FPS the same.
+- To keep the cost at that: a GPU write to memory looks up the affected texture by first byte only
+  (only a texture starting at that address is needed; previously the whole range was walked under
+  a mutex), and a write over pages the CPU hasn't changed and that are already marked as GPU data
+  proceeds without locking the tracker.
+- The "texture copy via buffers" and "texture clear via buffer" substitutions are kept: the path
+  through memory (dump the rendered frame to memory, run the game shader, re-upload the texture)
+  currently gives a frozen picture — render target contents don't reach game memory, and when the
+  scene is rendered at reduced resolution it isn't there at all. `BB_HLE_OFF=1|2|4` — an
+  experiment with substitutions off, `BB_HLE_STATS=1` — how many times they fire (~4, ~15 and ~10
+  per frame).
+- Experiment `BB_GUEST_VRAM=1`: all game memory in VRAM via Resizable BAR — 16 FPS already in the
+  menu (the CPU reads it over PCIe), not viable.
 
-## Сохранения не портятся при вылете (#64)
+## Saves no longer corrupted on crash (#64)
 
-- Bloodborne сохраняется примерно раз в секунду: удаляет `backupN`, переименовывает `userdataN` в
-  `backupN` и пишет новый `userdataN` (1,3 МБ). Вылет или снятие процесса посреди записи оставляли
-  обрезанный `userdataN`.
-- Теперь файл сохранения (`/savedataN/...`), открытый на запись, пишется во временную копию
-  (`<имя>.<n>.bbtmp` рядом), а при закрытии она сбрасывается на диск (`fsync`) и одной операцией
-  `rename` встаёт на место файла. Вылет посреди записи оставляет прежний файл (или его отсутствие,
-  если игра уже переименовала его в `backupN`: тогда игра сама читает `backupN` — проверено).
-- Пока файл открыт, операции по пути (`stat`, `access`, `truncate`, повторное открытие) видят копию:
-  игра проверяет размер записываемого файла по пути.
-- Копия не попадает в списки каталога; оставшиеся после вылета копии удаляются при монтировании.
-- `param.bin` и `icon0.png` записываются так же (временный файл, `fsync`, `rename`).
-- `BB_SAVE_TRACE=1` — все операции игры с файлами сохранений в журнал.
+- Bloodborne saves about once a second: deletes `backupN`, renames `userdataN` to `backupN` and
+  writes a new `userdataN` (1,3 MB). A crash or process kill mid-write left a truncated
+  `userdataN`.
+- Now a save file (`/savedataN/...`) opened for writing goes to a temporary copy
+  (`<name>.<n>.bbtmp` alongside), and on close it is flushed to disk (`fsync`) and put in place of
+  the file with a single `rename`. A crash mid-write leaves the previous file (or its absence if
+  the game already renamed it to `backupN`: then the game itself reads `backupN` — verified).
+- While the file is open, path operations (`stat`, `access`, `truncate`, reopening) see the copy:
+  the game checks the size of the file being written by path.
+- The copy does not appear in directory listings; copies left after a crash are deleted at mount
+  time.
+- `param.bin` and `icon0.png` are written the same way (temporary file, `fsync`, `rename`).
+- `BB_SAVE_TRACE=1` — all game operations on save files to the log.
 
-## Подготовка файлов игры и геймпад
+## Game file preparation and gamepad
 
-- `prepare.py` и остальные скрипты, лаунчер: текстовые файлы читаются и пишутся в UTF-8 явно, вывод в
-  консоль не падает на символах вне её кодировки (#55: китайская, японская, корейская локаль Windows,
-  `™` в названии игры).
-- `eboot.bin` (и модули `sce_module`) принимаются и обычным ELF, без обёртки SELF: так их пишут
-  некоторые программы дампа (#49). Проверено: ELF, извлечённый из нашего eboot, даёт тот же `boot.bin`
-  байт в байт.
-- Стики (PR #71; #70): клон Switch Pro, у которого все четыре оси в покое смещены на
-  ~±16380 и ход вдвое меньше, калибруется — нейтраль берётся из спокойного окна после подключения,
-  ход каждой оси — по её собственному диапазону. Мёртвая зона как в shadPS4: `BB_PAD_DEADZONE`
-  (по умолчанию 5 из 127) и `BB_PAD_DEADZONE_OUTER` (127). `BB_PAD_CENTER=lx,ly,rx,ry` — нейтраль
-  вручную, `BB_PAD_CENTER_CAL=0` — без замера.
-  Отличие от PR: нейтраль принимается, только если смещены все четыре оси (иначе обычный геймпад,
-  подключённый с зажатым стиком, запомнил бы этот наклон как нейтраль до переподключения); пока
-  нейтраль не известна, стики читаются как раньше, а не стоят на месте.
-- README.ru.md: адрес репозитория в команде `git clone` (PR #43; в английском README он уже был).
+- `prepare.py` and the other scripts, the launcher: text files are read and written in UTF-8
+  explicitly, console output doesn't die on characters outside its encoding (#55: Chinese,
+  Japanese, Korean Windows locales, `™` in the game title).
+- `eboot.bin` (and the `sce_module` modules) are also accepted as plain ELF, without the SELF
+  wrapper: some dump programs write them that way (#49). Verified: an ELF extracted from our eboot
+  gives the same `boot.bin` byte for byte.
+- Sticks (PR #71; #70): a Switch Pro clone with all four axes offset at rest by ~±16380 and half
+  the travel is calibrated — neutral is taken from a quiet window after connecting, each axis's
+  travel from its own range. Dead zone as in shadPS4: `BB_PAD_DEADZONE` (default 5 of 127) and
+  `BB_PAD_DEADZONE_OUTER` (127). `BB_PAD_CENTER=lx,ly,rx,ry` — neutral manually,
+  `BB_PAD_CENTER_CAL=0` — no measurement.
+  Difference from the PR: neutral is accepted only if all four axes are offset (otherwise an
+  ordinary gamepad connected with a stick held would remember that tilt as neutral until
+  reconnected); until neutral is known, sticks read as before rather than staying in place.
+- Historical localized README: the repository address in the `git clone` command (PR #43;
+  the English README already had it).
 
-## Зависания видеочипа: непрямые запуски, VRAM, сведения о видеокарте
+## GPU hangs: indirect dispatches, VRAM, GPU information
 
-- Непрямые запуски (#34, комментарий к #32; новая модель памяти): дважды игра теряла устройство на
-  симуляции частиц, получившей вместо числа групп мусор (1,2 и 3,8 млрд групп; у нас в логах от
-  2026-10-06 такое тоже было — 1,4 млрд и 6,4 млн, обошлось). Настоящие числа у Bloodborne — не больше
-  нескольких сотен. Теперь перед каждым непрямым запуском шейдер из одного потока
-  (`indirect_guard.comp`) копирует числа групп в наш буфер, обнуляя неправдоподобные (больше
-  пределов устройства или `BB_INDIRECT_GUARD_MAX` групп всего, по умолчанию 4M), и запуск идёт из
-  этой копии. Худшее, что теперь бывает, — пропущенный шаг частиц вместо вылета; пропуски
-  печатаются строкой `Indirect dispatches: N skipped ...`. `BB_INDIRECT_GUARD=0` — как раньше.
-  Причина мусора в памяти игры не найдена (только новая модель, редко). Цена: в пределах шума
-  (183–184 FPS, видеочип 5,42–5,47 мс в одной сцене). Проверено с порогом 10 (пропуски
-  срабатывают, игра идёт) и под слоем валидации (новых ошибок нет).
-- Перенос блоков памяти игры в VRAM теперь учитывает бюджет видеопамяти драйвера: если занято больше
-  `BB_VRAM_PROMOTE_PERCENT` (по умолчанию 90 %), новые копии не создаются — блоки читаются на месте
-  (медленнее, но без переполнения VRAM на картах с 8 ГБ), а перенос возобновляется, когда память
-  освободится. Строка в логе при переключении. Число «MiB of loaded blocks moved ... to VRAM» —
-  накопительное (сколько перенесено за сессию), а не занятое место; занятое — в строке `Memory:`.
-- В начале лога теперь строка с видеокартой, объёмом VRAM, драйвером и версией Vulkan (в отчётах
-  о зависаниях, как #56, её не было).
-- #56 (старая модель, зависание при загрузке карты): два лога — два разных места остановки (обычная
-  отрисовка из 5 индексов и копирования между проходами), шейдер из первого у нас работает 4–12 раз
-  за кадр без проблем, те же патчи (Disable DoF, Motion Blur) у нас включены. Воспроизвести не
-  удалось; без модели видеокарты и версии Mesa дальше не продвинуться (теперь они будут в логе).
+- Indirect dispatches (#34, comment on #32; new memory model): twice the game lost the device on a
+  particle simulation that got garbage instead of a group count (1,2 and 3,8 billion groups; our
+  logs from 2026-10-06 had it too — 1,4 billion and 6,4 million, no harm done). Bloodborne's real
+  numbers are no more than a few hundred. Now before each indirect dispatch a single-thread shader
+  (`indirect_guard.comp`) copies the group counts into our buffer, zeroing implausible ones (above
+  the device limits or `BB_INDIRECT_GUARD_MAX` groups total, default 4M), and the dispatch goes
+  from this copy. The worst that happens now is a skipped particle step instead of a crash; skips
+  are printed as `Indirect dispatches: N skipped ...`. `BB_INDIRECT_GUARD=0` — as before. The
+  cause of the garbage in game memory was not found (new model only, rare). Cost: within noise
+  (183–184 FPS, GPU 5,42–5,47 ms in one scene). Tested with threshold 10 (skips trigger, the game
+  runs) and under the validation layer (no new errors).
+- Moving game memory blocks to VRAM now respects the driver's video memory budget: if usage
+  exceeds `BB_VRAM_PROMOTE_PERCENT` (default 90 %), new copies are not created — blocks are read
+  in place (slower, but no VRAM overflow on 8 GB cards), and moving resumes when memory frees up.
+  A log line on switching. The "MiB of loaded blocks moved ... to VRAM" number is cumulative (how
+  much was moved during the session), not space used; used space is in the `Memory:` line.
+- The start of the log now has a line with the GPU, VRAM size, driver and Vulkan version (missing
+  from hang reports like #56).
+- #56 (old model, hang while loading the map): two logs — two different stop points (an ordinary
+  5-index draw and copies between passes), the shader from the first runs 4–12 times per frame
+  here without problems, the same patches (Disable DoF, Motion Blur) are enabled here. Could not
+  reproduce; without the GPU model and Mesa version there is no way forward (they will now be in
+  the log).
 
-## Баги из issues (2026-10-08, день)
+## Bugs from issues (2026-10-08, day)
 
-- **Сборка FSR 4.1.1 там, где контейнер Steam не запускается (#61).** Bazzite + 9070 XT: ни один
-  Proton «не запустил FSR 4.1», причина в списке была пустой, а в конце лога — `bwrap: No permissions
-  to create a new namespace`: контейнер Steam (pressure-vessel, и под umu-run тоже) не может создать
-  пространство имён — так бывает, когда сам лаунчер запущен в песочнице (Flatpak, ярлык Steam с
-  рантаймом) или ядро это запрещает. Теперь при такой ошибке Proton запускается напрямую, без
-  контейнера (сообщение `Steam's container could not start here (...): running Proton without it`,
-  дальше до конца сборки так же); `BB_FSR4CAP_RUNNER=direct` — сразу так.
-  Причина отказа каждого Proton — последняя непустая строка журнала записи, иначе ошибка контейнера
-  или Wine (раньше — последняя строка, часто пустая). Один и тот же Proton больше не пробуется дважды
-  по путям `/home/...` и `/var/home/...` (Fedora Atomic): одинаковые папки узнаются по устройству и
-  inode, а не по `realpath`.
-  Проверено: запись внутри `bwrap --disable-userns` (та же ошибка контейнера) — запасной путь
-  записал кадры FSR 4.1.1 под GE-Proton 11-6, результат совпадает с обычной записью побайтно (кроме
-  адресов указателей в `trace.txt`).
-- **MangoHud снова работает с системным MangoHud (#66).** С 0.3 `run.sh` при системном MangoHud
-  отключал встроенный в AppImage слой по имени (`VK_LOADER_LAYERS_DISABLE`), но у системного слоя
-  обычно то же имя (`VK_LAYER_MANGOHUD_overlay_64_x86_64`) — загрузчик Vulkan отключал оба. Теперь
-  встроенный MangoHud убирается из путей поиска слоёв (`XDG_DATA_DIRS`), а системный остаётся.
-  Проверено загрузчиком Vulkan (`VK_LOADER_DEBUG=layer`): раньше «forced disabled», теперь слой
-  вставляется.
-- **Картинка предмета на экране загрузки не пропадает (#67, патч bmy).** Маски Scaleform рисуются
-  без записи цвета; при выводе не 1080p они попадали в глубину игры, а следующая отрисовка UI
-  переключалась на глубину UI размера вывода с очищенным трафаретом — картинка не проходила тест.
-  Теперь отрисовки UI без цели цвета тоже идут в глубину UI. В игре не проверено (на macOS у автора —
-  да).
-- **Выбор монитора (#69).** Окно и полноэкранный режим шли на монитор, который SDL считает основным.
-  *Экран → Монитор* в лаунчере (`BB_DISPLAY`: номер или часть имени; список —
-  `bb-gpu-capabilities --displays`), в логе при запуске — строки `Display N: ...` с отметкой
-  выбранного. Проверено на Hyprland с двумя мониторами: полноэкранное окно открывается на выбранном
-  (обычное окно на Wayland размещает композитор).
-- **Дебаг-меню: шрифты из мода находятся.** Патч дебаг-меню читает шрифты из
-  `dvdroot_ps4/adhoc/font/DbgFont14h.ccm` и `.tpf` (и шейдеры `adhoc/FontShader/debugFont_*`),
-  причём игра запрашивает имена в нижнем регистре (`dbgfont14h.ccm`, найдено с новым
-  `BB_FILE_TRACE=1`). Проверка в `patches.py` искала их в `dvdroot_ps4/font` с точным регистром, а
-  рантайм на Linux различал регистр — шрифты не находились ни модом, ни в дампе, и запуск падал с
-  трассировкой Python. Теперь: рантайм, не найдя файл игры, ищет его без учёта регистра (как PS4 и
-  shadPS4; только при промахе, без затрат для найденных файлов); проверка смотрит в `adhoc/`
-  без учёта регистра; без шрифтов патч дебаг-меню не применяется (строка `Patches: debug menu off:
-  ...`, подсказка, если шрифты лежат в старом `dvdroot_ps4/font`), игра запускается; папка `adhoc`
-  в моде узнаётся как папка игры. Проверено: мод `Adhoc/Font/DbgFont14h.*` открывается игрой
-  (`Mods: open /app0/dvdroot_ps4/adhoc/font/dbgfont14h.ccm -> .../Adhoc/Font/DbgFont14h.ccm`).
-  С настоящими шрифтами меню не проверено (их нет).
-- `BB_FILE_TRACE=1`: каждый путь, который игра открывает, проверяет или читает (`File trace: ...`).
-- **Экрана «Играть по сети / вне сети» больше нет.** У порта нет PSN; теперь игра сразу открывает
-  главное меню в режиме вне сети — при запуске и после «Выйти из игры», с сохранением и без. Патч игры
-  «Skip Online/Offline Choice» (`patches/Bloodborne.xml`): функция, которая строит этот диалог
-  (`0x1b39030`, найдена по ID строк 401010/401011 из `menu.msgbnd`), возвращает то же, что вернул бы
-  её пункт «ИГРАТЬ ВНЕ СЕТИ» (вызов его обработчика `0x1b49cd0`, vtable `0x533be30`): следующий
-  диалог цепочки, так что выбор не показывается. Включается `patches.py` по умолчанию (лаунчер:
-  *Эффекты игры → Пропускать выбор*, `BB_SKIP_NETWORK_CHOICE=0` — показывать). Прежний вариант
-  (порт нажимал «крест», экран мелькал) удалён. `tools/restart.sh` по-прежнему показывает выбор
-  (его сценарий сам нажимает на титуле). Проверено скриншотами: запуск без ввода — сразу главное
-  меню; «Продолжить» → «Выйти из игры» — сразу главное меню.
-- Память при повторной загрузке локации (6 циклов «Продолжить → выйти», новая модель): RSS
-  707 → 733 МиБ, VRAM выходит на ~3,7 ГБ; старая модель (4 цикла): RSS 3735 → 3795 МиБ, VRAM ~3 ГБ.
-  Утечки на гигабайты (сообщение из Discord про телепорты) так не видно; телепорт между разными
-  локациями не проверен.
-- **Нехватка видеопамяти у копий памяти игры не роняет игру.** Старая модель держит копии памяти
-  игры в блоках VRAM по 64 МиБ; на картах с 4 ГБ (RTX 3050 mobile, сообщение из Discord) выделение
-  блока могло вернуть `ErrorOutOfDeviceMemory`, и игра останавливалась (`vk_platform.h:73`, код 23).
-  Теперь такой блок берётся из системной памяти, которую GPU читает по шине (строка `Guest memory:
-  VRAM is full ...`): медленнее, но без вылета. `BB_RESIDENCY_VRAM_LIMIT_MB=N` — проверка (VRAM
-  «кончается» после N МиБ блоков). Проверено с 32 МиБ: игра идёт, картинка верна, 28 FPS (всё в
-  системной памяти; в жизни туда уходит только излишек). То ли это место, где упал отчёт из
-  Discord, не доказано — строки перед остановкой в нём нет.
-- **«Чтение данных GPU: Precise» больше не замораживает первую катсцену.** Новая игра → катсцена
-  стояла на первом кадре (звук шёл): видеоплеер писал кадр ролика в память, которую GPU писал
-  раньше; обработчик попросил поток GPU о чтении, а тот, снимая копию байтов игры для «двойников»
-  (`BB_GPU_WRITE_TWINS`) под их мьютексом, сам попал на защищённую от чтения страницу и в
-  обработчике ждал тот же мьютекс. Найдено по стекам потоков (SIGUSR2). Теперь байты игры для
-  «двойников» читаются через вид без защиты (`ReadBacking`), а с `BB_READBACKS=2` «двойники»
-  выключены: страница с байтами GPU, в которую игре можно писать, была бы «только для записи»
-  (следующей остановкой был `page_manager.cpp: ... write-only`). Проверено: новая игра с
-  `BB_READBACKS=2` и без — катсцена идёт до создания персонажа.
-- **Меню настроек — как в ПК-играх, в стиле Bloodborne.** Вместо окна ImGui поверх игры
-  (Insert / L3+R3): игра затемнена, по центру панель с орнаментными линиями, как у диалогов самой
-  игры (шрифт с засечками DejaVu Serif, встроен рядом с DejaVu Sans), заголовок и вкладки
-  «Изображение / Апскейлер / Эффекты игры / Дополнительно» (L1/R1, Q/E, PageUp/PageDown, мышь).
-  Каждая настройка — строка «название ◀ значение ▶»: вверх/вниз (крестовина, стик, стрелки) —
-  выбор строки, влево/вправо — значение, Крест/Enter — следующее значение, мышь — клик по
-  стрелкам или строке, ползунки тянутся мышью. Описание выбранной настройки — внизу (вместо «(?)»),
-  там же предупреждение о перезапуске; строка «Применить и перезапустить игру» — когда нужно.
-  Подсказки кнопок — в подвале; Esc / Круг / Insert / L3+R3 — закрыть. Недоступные значения
-  (FSR 4 без поддержки) пропускаются, зависимые строки гаснут (пресет при TAA, сила резкости без
-  резкости, маска реактивности). Фокус — свой (навигация ImGui до строк не доходила).
-  `BB_MENU_KEYS_FILE=<файл>` — сценарное управление меню для проверок (`toggle up down left right
-  enter back l1 r1 kup kdown`).
-- **Настройки порта — родные страницы в меню игры «Система».** После «Экран/звук» появились пункты
-  «Изображение», «Эффекты игры» и «Патчи игры»: их строит и рисует сама игра (её строки, списки,
-  ползунок, подсказка внизу, «По умолчанию» с подтверждением), и на титульном экране, и в паузе.
-  «Изображение»: разрешение вывода, апскейлер (в списке только то, что эта видеокарта и сборка
-  умеют: без NVIDIA нет DLSS), пресет, резкость (ползунок 0–10, 0 — выкл, 10 = 2.0), счётчик FPS —
-  меняются сразу и пишутся в `bbport.ini`. «Эффекты игры» / «Патчи игры»: детализация моделей и
-  патчи-эффекты (после перезапуска). «По умолчанию» ставит значения порта по умолчанию. Тексты на
-  языке самой игры (русский — если её тексты на кириллице, иначе английский). Как устроено
-  (`gpu/shim/bbport_game_menu.cpp`): перехват поиска текстов игры (свои id 0x7F0000+) и добавления
-  пункта в меню (0x1b4e2a0, после «Экран/звук»); страница — макет «ControllSetting» со своими
-  строками и заголовком; последний аргумент строк игры — указатель на значение по умолчанию.
-  Каждая перехваченная функция сверяется побайтно, `BB_GAME_MENU=0` — выключить. Проверено: 16
-  открытий страниц — рост памяти как у родных страниц игры; оверлей (Insert / L3+R3) остался.
-- Ровность 60 FPS со временем (сообщение из Discord: «через некоторое время кадры неровные»):
-  6 минут стоя, `BB_FPS=60` — каждую минуту 16,67 мс, разброс 0,00–0,01 мс, ни одного кадра
-  дольше 20 мс (кроме загрузки в первой минуте). На RX 7800 XT не воспроизводится.
+- **FSR 4.1.1 capture where the Steam container won't start (#61).** Bazzite + 9070 XT: no Proton
+  "started FSR 4.1", the reason in the list was empty, and at the end of the log — `bwrap: No
+  permissions to create a new namespace`: the Steam container (pressure-vessel, and under umu-run
+  too) cannot create a namespace — this happens when the launcher itself runs in a sandbox
+  (Flatpak, a Steam shortcut with a runtime) or the kernel forbids it. Now on such an error Proton
+  is run directly, without the container (message `Steam's container could not start here (...):
+  running Proton without it`, then the same to the end of the capture); `BB_FSR4CAP_RUNNER=direct`
+  — do that right away.
+  Each Proton's failure reason is the last non-empty line of the capture log, otherwise the
+  container or Wine error (previously — the last line, often empty). The same Proton is no longer
+  tried twice via the `/home/...` and `/var/home/...` paths (Fedora Atomic): identical folders are
+  recognized by device and inode, not by `realpath`.
+  Verified: a capture inside `bwrap --disable-userns` (same container error) — the fallback path
+  recorded FSR 4.1.1 frames under GE-Proton 11-6, the result matches an ordinary capture byte for
+  byte (except pointer addresses in `trace.txt`).
+- **MangoHud works with the system MangoHud again (#66).** Since 0.3, with a system MangoHud,
+  `run.sh` disabled the layer built into the AppImage by name (`VK_LOADER_LAYERS_DISABLE`), but
+  the system layer usually has the same name (`VK_LAYER_MANGOHUD_overlay_64_x86_64`) — the Vulkan
+  loader disabled both. Now the built-in MangoHud is removed from the layer search paths
+  (`XDG_DATA_DIRS`), and the system one remains. Verified with the Vulkan loader
+  (`VK_LOADER_DEBUG=layer`): previously "forced disabled", now the layer is inserted.
+- **The item picture on the loading screen no longer disappears (#67, bmy patch).** Scaleform
+  masks are drawn without color writes; with non-1080p output they landed in the game's depth, and
+  the next UI draw switched to output-size UI depth with a cleared stencil — the picture failed
+  the test. Now UI draws without a color target also go to the UI depth. Not tested in game (on
+  the author's macOS — yes).
+- **Monitor selection (#69).** Window and fullscreen went to the monitor SDL considers primary.
+  *Screen → Monitor* in the launcher (`BB_DISPLAY`: a number or part of the name; list —
+  `bb-gpu-capabilities --displays`), at startup the log has `Display N: ...` lines with the
+  selected one marked. Tested on Hyprland with two monitors: the fullscreen window opens on the
+  selected one (a regular window on Wayland is placed by the compositor).
+- **Debug menu: fonts from the mod are found.** The debug menu patch reads fonts from
+  `dvdroot_ps4/adhoc/font/DbgFont14h.ccm` and `.tpf` (and the `adhoc/FontShader/debugFont_*`
+  shaders), with the game requesting names in lowercase (`dbgfont14h.ccm`, found with the new
+  `BB_FILE_TRACE=1`). The check in `patches.py` looked for them in `dvdroot_ps4/font` with exact
+  case, and the runtime on Linux was case-sensitive — the fonts were found neither by the mod nor
+  in the dump, and startup died with a Python traceback. Now: the runtime, not finding a game
+  file, looks for it case-insensitively (like PS4 and shadPS4; only on a miss, no cost for found
+  files); the check looks in `adhoc/` case-insensitively; without the fonts the debug menu patch
+  is not applied (line `Patches: debug menu off: ...`, a hint if the fonts are in the old
+  `dvdroot_ps4/font`), the game starts; the `adhoc` folder in a mod is recognized as a game
+  folder. Verified: the mod's `Adhoc/Font/DbgFont14h.*` is opened by the game (`Mods: open
+  /app0/dvdroot_ps4/adhoc/font/dbgfont14h.ccm -> .../Adhoc/Font/DbgFont14h.ccm`). Not tested with
+  the real fonts (we don't have them).
+- `BB_FILE_TRACE=1`: every path the game opens, checks or reads (`File trace: ...`).
+- **The "Play online / offline" screen is gone.** The port has no PSN; now the game opens the main
+  menu in offline mode right away — at startup and after "Quit Game", with a save and without. The
+  game patch "Skip Online/Offline Choice" (`patches/Bloodborne.xml`): the function that builds
+  this dialog (`0x1b39030`, found via string IDs 401010/401011 from `menu.msgbnd`) returns what
+  its "PLAY OFFLINE" item would return (calling its handler `0x1b49cd0`, vtable `0x533be30`): the
+  next dialog in the chain, so the choice is not shown. Enabled by `patches.py` by default
+  (launcher: *Game effects → Skip the choice*, `BB_SKIP_NETWORK_CHOICE=0` — show). The previous
+  variant (the port pressed Cross, the screen flickered) is removed. `tools/restart.sh` still
+  shows the choice (its scenario presses on the title itself). Verified with screenshots: startup
+  without input — straight to the main menu; "Continue" → "Quit Game" — straight to the main menu.
+- Memory when reloading a location (6 "Continue → quit" cycles, new model): RSS 707 → 733 MiB,
+  VRAM climbs to ~3,7 GB; old model (4 cycles): RSS 3735 → 3795 MiB, VRAM ~3 GB. A leak in the
+  gigabytes (the Discord report about teleports) is not visible this way; teleporting between
+  different locations not tested.
+- **VRAM shortage for game memory copies no longer brings the game down.** The old model keeps
+  copies of game memory in 64 MiB VRAM blocks; on 4 GB cards (RTX 3050 mobile, Discord report)
+  block allocation could return `ErrorOutOfDeviceMemory`, and the game stopped
+  (`vk_platform.h:73`, code 23). Now such a block is taken from system memory the GPU reads across
+  the bus (line `Guest memory: VRAM is full ...`): slower, but no crash.
+  `BB_RESIDENCY_VRAM_LIMIT_MB=N` — for testing (VRAM "runs out" after N MiB of blocks). Tested
+  with 32 MiB: the game runs, the picture is correct, 28 FPS (everything in system memory; in real
+  life only the excess goes there). Whether this is where the Discord report crashed is unproven —
+  it has no lines before the stop.
+- **"GPU data read: Precise" no longer freezes the first cutscene.** New game → the cutscene stood
+  on the first frame (sound played): the video player wrote a movie frame into memory the GPU had
+  written earlier; the handler asked the GPU thread for a read, and that thread, taking a copy of
+  game bytes for the "twins" (`BB_GPU_WRITE_TWINS`) under their mutex, itself hit a read-protected
+  page and waited on the same mutex in the handler. Found via thread stacks (SIGUSR2). Now game
+  bytes for the "twins" are read through a view without protection (`ReadBacking`), and with
+  `BB_READBACKS=2` the "twins" are off: a page with GPU bytes the game may write to would be
+  "write-only" (the next stop was `page_manager.cpp: ... write-only`). Verified: new game with
+  `BB_READBACKS=2` and without — the cutscene plays through to character creation.
+- **Settings menu — like in PC games, in Bloodborne style.** Instead of an ImGui window over the
+  game (Insert / L3+R3): the game is dimmed, a centered panel with ornamental lines like the
+  game's own dialogs (the serif font DejaVu Serif, bundled next to DejaVu Sans), a title and tabs
+  "Graphics / Upscaler / Game effects / Advanced" (L1/R1, Q/E, PageUp/PageDown, mouse). Each
+  setting is a "name ◀ value ▶" row: up/down (d-pad, stick, arrows) — row selection, left/right —
+  value, Cross/Enter — next value, mouse — click on the arrows or the row, sliders drag with the
+  mouse. The selected setting's description — at the bottom (instead of "(?)"), with the restart
+  warning there too; an "Apply and restart the game" row — when needed. Button hints — in the
+  footer; Esc / Circle / Insert / L3+R3 — close. Unavailable values (FSR 4 without support) are
+  skipped, dependent rows dim (preset with TAA, sharpness strength without sharpness, reactivity
+  mask). Focus is our own (ImGui navigation never reached the rows). `BB_MENU_KEYS_FILE=<file>` —
+  scripted menu control for testing (`toggle up down left right enter back l1 r1 kup kdown`).
+- **Port settings — native pages in the game's "System" menu.** After "Screen/sound" the items
+  "Graphics", "Game effects" and "Game patches" appeared: they are built and drawn by the game
+  itself (its strings, lists, slider, the hint at the bottom, "Default" with confirmation), both
+  on the title screen and in pause. "Graphics": output resolution, upscaler (the list only has
+  what this GPU and build can do: no DLSS without NVIDIA), preset, sharpness (slider 0–10, 0 —
+  off, 10 = 2.0), FPS counter — apply immediately and are written to `bbport.ini`. "Game effects"
+  / "Game patches": model detail and effect patches (after a restart). "Default" sets the port's
+  default values. Texts are in the game's own language (Russian — if its texts are in Cyrillic,
+  otherwise English). How it works (`gpu/shim/bbport_game_menu.cpp`): hooking the game's text
+  lookup (own ids 0x7F0000+) and menu item addition (0x1b4e2a0, after "Screen/sound"); the page is
+  a "ControllSetting" layout with its own strings and title; the last argument of the game's
+  strings is a pointer to the default value. Each hooked function is verified byte for byte,
+  `BB_GAME_MENU=0` — disable. Verified: 16 page openings — memory growth like the game's native
+  pages; the overlay (Insert / L3+R3) remains.
+- 60 FPS evenness over time (Discord report: "after some time frames are uneven"): 6 minutes
+  standing, `BB_FPS=60` — every minute 16,67 ms, spread 0,00–0,01 ms, not a single frame longer
+  than 20 ms (except loading in the first minute). Not reproducible on RX 7800 XT.
 
-## Влитые PR (2026-10-08, вечер)
+## Merged PRs (2026-10-08, evening)
 
-- **PR #84: DLC.** Папки `<user>/addcont/<title>/<метка>` (как у shadPS4) сообщаются игре
-  как установленные дополнения: сохранения с The Old Hunters загружаются, области DLC доступны
-  (#33). Данные дополнений не монтируются — The Old Hunters нужна только метка, данные в патче
-  1.09. При вливании: `_GNU_SOURCE` под `#ifndef` (тест собирает с `-D_GNU_SOURCE` и `-Werror`), в
-  тест AppContent — заглушка папки пользователя и проверка: папка `addcont/CUSA00900/SPEXPANSIONDLC03`
-  даёт одну запись «установлено».
-- **PR #80:** `BB_FSR4_STATS=1` больше не ломает пайплайны FSR 4 v07 без
-  `VK_EXT_pipeline_executable_statistics`. Патч к подмодулю FSR-Vulkan изменился: рабочую копию
-  подмодуля нужно вернуть (`git -C gpu/third_party/fsr-vulkan checkout -- src/ffx_vk_fsr4_v07.c`), и
-  `build.sh` наложит новую версию.
-- **PR #78:** лаунчер — кнопки «Копировать» и «Экспорт лога…» на вкладке «Журнал».
-- **PR #75:** лаунчер на упрощённом китайском (строки, добавленные сегодня, — на
-  английском до перевода).
-- **PR #83: DLSS на Linux.** Мост `gpu/dlss_bridge` (MIT, единственный код с SDK NVIDIA)
-  собирается с `DLSS_SDK_ROOT=<github.com/NVIDIA/DLSS> bash build.sh` в `out/libbbport_dlss.so`,
-  рядом копируется библиотека NVIDIA; игра загружает мост при запуске. Новый апскейлер `dlss`
-  (лаунчер, меню, `bbport.ini`): те же входы, что у FSR 3.1, Native AA = DLAA, при ошибке — FSR 3.1.
-  Без моста и библиотеки, на не-NVIDIA или с `BB_DLSS=0` ничего не меняется (DLSS в меню недоступен).
-  При вливании: пункт DLSS и его описание перенесены в новое меню, строка в списке апскейлеров
-  лаунчера — после строки языков PR #75. Проверено здесь: сборка без SDK, игра на AMD (FSR 4.1.1,
-  FSR 4 v07 со статистикой). С DLSS не проверено (нет NVIDIA); автор — RTX 4090. В AppImage мост и
-  библиотека NVIDIA не входят.
+- **PR #84: DLC.** Folders `<user>/addcont/<title>/<label>` (as in shadPS4) are reported to the
+  game as installed add-ons: saves with The Old Hunters load, DLC areas are accessible (#33).
+  Add-on data is not mounted — The Old Hunters only needs the label, the data is in patch 1.09. On
+  merge: `_GNU_SOURCE` under `#ifndef` (the test builds with `-D_GNU_SOURCE` and `-Werror`), in
+  the AppContent test — a user folder stub and a check: the folder
+  `addcont/CUSA00900/SPEXPANSIONDLC03` yields one "installed" entry.
+- **PR #80:** `BB_FSR4_STATS=1` no longer breaks FSR 4 v07 pipelines without
+  `VK_EXT_pipeline_executable_statistics`. The patch to the FSR-Vulkan submodule changed: the
+  submodule's working copy must be reverted (`git -C gpu/third_party/fsr-vulkan checkout --
+  src/ffx_vk_fsr4_v07.c`), and `build.sh` will apply the new version.
+- **PR #78:** launcher — "Copy" and "Export log…" buttons on the "Log" tab.
+- **PR #75:** launcher in Simplified Chinese (strings added today are in English until
+  translated).
+- **PR #83: DLSS on Linux.** The `gpu/dlss_bridge` bridge (MIT, the only code with the NVIDIA SDK)
+  is built with `DLSS_SDK_ROOT=<github.com/NVIDIA/DLSS> bash build.sh` into
+  `out/libbbport_dlss.so`, the NVIDIA library is copied alongside; the game loads the bridge at
+  startup. New upscaler `dlss` (launcher, menu, `bbport.ini`): the same inputs as FSR 3.1,
+  Native AA = DLAA, on error — FSR 3.1. Without the bridge and library, on non-NVIDIA or with
+  `BB_DLSS=0` nothing changes (DLSS unavailable in the menu). On merge: the DLSS item and its
+  description moved to the new menu, the launcher upscaler list string — after the PR #75
+  languages string. Tested here: build without SDK, game on AMD (FSR 4.1.1, FSR 4 v07 with
+  statistics). Not tested with DLSS (no NVIDIA); the author has an RTX 4090. The bridge and the
+  NVIDIA library are not included in the AppImage.
 
-## После 0.5-pre1 (2026-10-09)
+## After 0.5-pre1 (2026-10-09)
 
-- **Новая модель памяти снова только для AMD.** Лог с GTX 1660 Ti (драйвер 615.71, Hyprland):
-  импорт памяти хоста прошёл проверку при запуске, но после первого переноса блоков в VRAM
-  (`84 MiB of loaded blocks moved`) — `GPU watchdog: submission 4114 not finished after 10 s`:
-  видеочип закончил шейдер копирования и не начинал следующий запуск. Отправка ждёт семафор
-  перепривязки памяти (`vkQueueBindSparse` арены), и на NVIDIA каждая такая перепривязка держала
-  видеочип 10 секунд и дольше; рабочий стол вставал вместе с ним, со стороны — «зависает вся
-  система». Проверка при запуске этого не ловит (там одна маленькая привязка). Теперь на NVIDIA
-  переключатель недоступен, у кого он был включён — старая модель (лаунчер передаёт
-  `BB_PC_MODEL=0`, библиотека GPU тоже не включает её на NVIDIA); `BB_PC_MODEL_ANY_GPU=1` — всё же
-  попробовать. README и тексты лаунчера исправлены.
-- `BB_RESIDENCY_REPORT=<файл>` (диагностика новой модели): когда файл появляется, в журнал —
-  блоки памяти игры, которые видеочип недавно читал на месте, а не из VRAM, и почему они не
-  перенесены (процессор пишет часто; байты, о записи которых мы не знаем; ждут переноса).
-  У лампы в Кошмаре охотника: ~1,2 ГБ таких блоков памяти Garlic целиком «неизвестны».
-- Сообщение «первая загрузка медленнее, после телепорта 90 FPS» (RX 7900 XTX, новая модель): здесь
-  не воспроизвелось — первая и повторная загрузка (выход в титул, «Продолжить») 131,7 и 131,9 FPS
-  на RX 7800 XT; переносы в VRAM после загрузки заканчиваются за секунды. Нужен лог тестера.
+- **The new memory model is AMD-only again.** Log from a GTX 1660 Ti (driver 615.71, Hyprland):
+  host memory import passed the startup check, but after the first block move to VRAM (`84 MiB of
+  loaded blocks moved`) — `GPU watchdog: submission 4114 not finished after 10 s`: the GPU
+  finished the copy shader and would not start the next dispatch. Submission waits on the memory
+  rebind semaphore (the arena's `vkQueueBindSparse`), and on NVIDIA each such rebind held the GPU
+  for 10 seconds and longer; the desktop froze along with it — from the outside, "the whole system
+  hangs". The startup check doesn't catch this (it does one small bind). Now the switch is
+  unavailable on NVIDIA; those who had it on get the old model (the launcher passes
+  `BB_PC_MODEL=0`, the GPU library also doesn't enable it on NVIDIA); `BB_PC_MODEL_ANY_GPU=1` —
+  try anyway. README and launcher texts fixed.
+- `BB_RESIDENCY_REPORT=<file>` (new model diagnostics): when the file appears, the log gets the
+  game memory blocks the GPU recently read in place rather than from VRAM, and why they weren't
+  moved (the CPU writes often; bytes we don't know were written; waiting to be moved). At the lamp
+  in Hunter's Dream: ~1,2 GB of such blocks, whole Garlic memory chunks entirely "unknown".
+- The report "first load slower, 90 FPS after teleport" (RX 7900 XTX, new model): did not
+  reproduce here — first and repeat load (exit to title, "Continue") 131,7 and 131,9 FPS on
+  RX 7800 XT; VRAM moves after loading finish within seconds. A tester's log is needed.
 
-## Новая модель на NVIDIA: разбор (2026-10-09, продолжение)
+## New model on NVIDIA: analysis (2026-10-09, continued)
 
-- **Причина зависания найдена.** Это известная регрессия проприетарного драйвера NVIDIA на Linux
-  (с 555 и до сих пор, у тестера 615): время `vkQueueBindSparse` растёт с числом страниц, **уже**
-  привязанных во всех sparse-ресурсах, и вызов держит глобальную блокировку (форум разработчиков
-  NVIDIA, «Sparse texture binding is painfully slow»: 9200 страниц — 3,6 с; исправления нет).
-  В арене новой модели — гигабайты страниц по 64 КиБ (у тестера 863 МиБ привязано на месте ещё
-  до первых переносов), так что каждый перенос блоков в VRAM стоил секунды. Игра сама заметила
-  остановку видеочипа ещё до первого переноса («Stall during rendering at flush 1»).
-- **Почему не обойти «одной правкой».** Замер `BB_RESIDENCY_MIX=1` (новая диагностика): ~17 тыс.
-  привязок в секунду (~85 за кадр) — диапазоны в сотни МБ, где одновременно блоки в VRAM и на
-  месте (шейдеры, привязанные ко всей памяти; треть — поверх данных, записанных видеочипом).
-  Одна sparse-арена смешивает их бесплатно; схема «VRAM-арена + отдельные буферы памяти игры»
-  их не обслужит. Без перепривязок вообще (`BB_FIXED_ARENA=1`, всё читается на месте через шину):
-  **48,6 FPS против ~205** на RX 7800 XT — хуже старой модели.
-- Итог: новая модель остаётся только для AMD. Для NVIDIA нужна либо починка драйвера (или
-  Mesa NVK, где sparse работает нормально), либо программная подкачка страниц в транслированных
-  шейдерах вместо sparse — многодневная переделка.
-- Добавлено: `BB_FIXED_ARENA=1/0` (арена держит первые привязки: без переносов в VRAM, блоки вне
-  кусков памяти игры — в системной памяти; по умолчанию — при импорте памяти хоста, т. е. на NVIDIA
-  с `BB_PC_MODEL_ANY_GPU=1`); строка в журнале `vkQueueBindSparse of N ranges took X ms` (дольше
-  50 мс, в обеих моделях); в отчёте сторожа видеочипа — `Arena binds: ...` (ждут ли отправки
-  незавершённую привязку); `BB_RESIDENCY_MIX=1` — привязки «на месте / VRAM / смешанные» за 2 с.
+- **Hang cause found.** It is a known regression of the proprietary NVIDIA driver on Linux (from
+  555 to this day; the tester has 615): the time of `vkQueueBindSparse` grows with the number of
+  pages **already** bound in all sparse resources, and the call holds a global lock (NVIDIA
+  developer forum, "Sparse texture binding is painfully slow": 9200 pages — 3,6 s; no fix). The
+  new model's arena holds gigabytes of 64 KiB pages (the tester had 863 MiB bound in place before
+  the first moves), so each block move to VRAM cost seconds. The game itself noticed the GPU stall
+  before the first move ("Stall during rendering at flush 1").
+- **Why it can't be worked around with "one edit".** A `BB_RESIDENCY_MIX=1` measurement (new
+  diagnostics): ~17 thousand binds per second (~85 per frame) — ranges of hundreds of MB where
+  blocks in VRAM and in place coexist (shaders bound to all of memory; a third over data written
+  by the GPU). One sparse arena mixes them for free; a "VRAM arena + separate game memory buffers"
+  scheme won't serve them. With no rebinds at all (`BB_FIXED_ARENA=1`, everything read in place
+  across the bus): **48,6 FPS vs ~205** on RX 7800 XT — worse than the old model.
+- Bottom line: the new model stays AMD-only. NVIDIA needs either a driver fix (or Mesa NVK, where
+  sparse works fine), or software page swapping in translated shaders instead of sparse — a
+  multi-day rework.
+- Added: `BB_FIXED_ARENA=1/0` (the arena keeps the first binds: no VRAM moves, blocks outside game
+  memory chunks in system memory; default — with host memory import, i.e. on NVIDIA with
+  `BB_PC_MODEL_ANY_GPU=1`); the log line `vkQueueBindSparse of N ranges took X ms` (longer than
+  50 ms, in both models); in the GPU watchdog report — `Arena binds: ...` (are submissions waiting
+  on an unfinished bind); `BB_RESIDENCY_MIX=1` — "in place / VRAM / mixed" binds over 2 s.
 
-## Новая модель на всех видеокартах: модуль памяти прослойки (2026-10-09)
+## New model on all GPUs: the layer memory module (2026-10-09)
 
-- **Новая модель включается на любой видеокарте.** На AMD — как раньше, sparse-арена. На NVIDIA,
-  Intel и остальных — модуль памяти прослойки (`gpu/layer`, docs/MEMORY_MODULE_PLAN.ru.md): память
-  игры привязывается на месте через буферы её кусков, копии в VRAM — отдельные буферы («зеркала»),
-  перенос — копия плюс учёт в модуле. `vkQueueBindSparse`, из-за которого на NVIDIA зависали игра
-  и рабочий стол, в этом режиме не вызывается ни разу. Вручную: `BB_LAYER_MEMORY=1/0`. Лаунчер
-  больше не прячет переключатель на не-AMD; README и подсказка (три языка) исправлены. **На
-  NVIDIA не проверено** — нужен лог тестера.
-- Замеры на RX 7800 XT, стоя: было 48–60 FPS в режиме модуля, стало ~205 (sparse ~205–238, старая
-  модель ~220). В другом месте: модуль 167,5, sparse 164,5, старая модель 146. 5 минут ходьбы с
-  подгрузкой областей — без ошибок, 166–240 FPS.
-- Что мешало (найдено по профилю видеочипа):
-  - **HLE копий и очисток образов не срабатывало.** Детекторы `IsComputeImageCopy` /
-    `IsComputeImageClear` требуют у шейдера ровно два буфера, а в режиме модуля каждому шейдеру
-    с буферами игры добавлялся третий — таблица страниц. Копия памяти целей рендеринга
-    (`cs 3d5ebf4e`) и очистка (`cs 8b355b5a`, 31 запуск за кадр) шли настоящими шейдерами через
-    память, а образы перезагружались из неё каждый кадр (~16 образов 1080p вместо ~2,6).
-    Теперь таблица страниц не считается (`ShaderBufferCount`): 60 → 136 FPS.
-  - **Смешанные диапазоны.** Диапазон, у которого все блоки в VRAM, кроме одного с «неизвестными»
-    байтами (край, промежуток между образами), целиком читался через PCIe (8 МБ на привязку).
-    Теперь такой блок «летучий» в зеркале: обновляется из памяти игры перед каждой привязкой, то,
-    что запуск записал, копируется обратно после запуска. 139 → 207 FPS. `BB_LAYER_VOLATILE=0` —
-    выключить.
-  - Перенос в VRAM при первой привязке диапазона известных данных (как делала арена); он
-    соблюдает `BB_GARLIC_VRAM=0` и бюджет VRAM (`BB_VRAM_PROMOTE_PERCENT`, важно для карт с 6 ГБ).
-- Стартовая проверка импорта памяти хоста в режиме модуля проверяет запись видеочипа и процессора
-  через сам импортированный буфер, без sparse-буфера.
-- Диагностика: `BB_RESIDENCY_MIX=2` — ещё и самые тяжёлые привязки на месте / смешанные с
-  разбором блоков (VRAM, подходят, «динамические», неизвестные байты); в строке `Layer memory:` —
-  число вызовов `vkQueueBindSparse` и байты, скопированные обратно.
+- **The new model turns on on any GPU.** On AMD — as before, sparse arena. On NVIDIA, Intel and
+  the rest — the layer memory module (`gpu/layer`, docs/MEMORY_MODULE_PLAN.md): game memory is
+  bound in place through buffers of its chunks, VRAM copies are separate buffers ("mirrors"), a
+  move is a copy plus accounting in the module. `vkQueueBindSparse`, which hung the game and the
+  desktop on NVIDIA, is never called in this mode. Manually: `BB_LAYER_MEMORY=1/0`. The launcher
+  no longer hides the switch on non-AMD; README and the hint (three languages) fixed. **Not tested
+  on NVIDIA** — a tester's log is needed.
+- Measurements on RX 7800 XT, standing: was 48–60 FPS in module mode, now ~205 (sparse ~205–238,
+  old model ~220). Elsewhere: module 167,5, sparse 164,5, old model 146. 5 minutes of walking with
+  area streaming — no errors, 166–240 FPS.
+- What was in the way (found from the GPU profile):
+  - **HLE of image copies and clears was not firing.** The `IsComputeImageCopy` /
+    `IsComputeImageClear` detectors require the shader to have exactly two buffers, but in module
+    mode every shader with game buffers got a third — the page table. The render target memory
+    copy (`cs 3d5ebf4e`) and the clear (`cs 8b355b5a`, 31 dispatches per frame) ran as real
+    shaders through memory, and images were reloaded from it every frame (~16 1080p images instead
+    of ~2,6). Now the page table isn't counted (`ShaderBufferCount`): 60 → 136 FPS.
+  - **Mixed ranges.** A range with all blocks in VRAM except one with "unknown" bytes (an edge, a
+    gap between images) was read entirely over PCIe (8 MB per bind). Now such a block is
+    "volatile" in the mirror: updated from game memory before each bind, and what the dispatch
+    wrote is copied back after the dispatch. 139 → 207 FPS. `BB_LAYER_VOLATILE=0` — disable.
+  - Move to VRAM on the first bind of a range of known data (as the arena did); it respects
+    `BB_GARLIC_VRAM=0` and the VRAM budget (`BB_VRAM_PROMOTE_PERCENT`, important for 6 GB cards).
+- The startup host memory import check in module mode checks GPU and CPU writes through the
+  imported buffer itself, without a sparse buffer.
+- Diagnostics: `BB_RESIDENCY_MIX=2` — also the heaviest in-place / mixed binds with a block
+  breakdown (VRAM, eligible, "dynamic", unknown bytes); in the `Layer memory:` line — the number
+  of `vkQueueBindSparse` calls and bytes copied back.
 
-## Модуль памяти: взрывы вершин и скорость (2026-10-09, день)
+## Memory module: vertex explosions and speed (2026-10-09, day)
 
-Итог работы над новой моделью для NVIDIA — в `docs/NVIDIA_MEMORY_MODEL.ru.md`: ловушки записи на
-блоках с копией в VRAM, чтения через модуль везде, где есть копия, данные процессора больше не
-затираются данными видеочипа, запись видеочипа в VRAM только в блоки, которые процессор не трогал
-(`BB_LAYER_GPU_WRITES`), шейдер копирования в режиме модуля через HLE, кэши ответов модуля.
+The result of the work on the new model for NVIDIA is in `docs/NVIDIA_MEMORY_MODEL.md`: write
+traps on blocks with a VRAM copy, reads through the module everywhere a copy exists, CPU data no
+longer overwritten by GPU data, GPU writes to VRAM only into blocks the CPU hasn't touched
+(`BB_LAYER_GPU_WRITES`), the copy shader in module mode via HLE, module response caches.
 
-## 0.5-pre2: оригинальное GPU-копирование и переносимые метки
+## 0.5-pre2: native GPU copy and portable labels
 
-В итоговой сборке шейдер копирования в новой модели теперь нативный по умолчанию: его записи
-согласованы между памятью игры и зеркалами VRAM. Добавлены стандартные Vulkan-метки завершения
-для GPU без `VK_AMD_buffer_marker`, исправлены зависимости записи/чтения буферов и миграция
-всего кэша при изменении формата. Подробное описание релиза и проверок:
+In the release build the copy shader in the new model is now native by default: its writes are
+coherent between game memory and the VRAM mirrors. Standard Vulkan completion labels added for
+GPUs without `VK_AMD_buffer_marker`; buffer write/read dependencies and whole-cache migration on
+format change fixed. Full description of the release and testing:
 [CHANGES_0.5-pre2.md](CHANGES_0.5-pre2.md).
 
-## 0.5-pre3: модуль памяти на NVIDIA
+## 0.5-pre3: memory module on NVIDIA
 
-По первым логам с GTX 1660 Ti: копии в VRAM снова включены для модуля (их выключал обход
-sparse-арены), общий бюджет VRAM с кэшем текстур, запас роста копий вместо их перевыделения,
-записи WRITE_DATA в копию, наблюдаемые блоки (`BB_LAYER_WATCH`), повтор чтения файлов при EFAULT.
-Подробности: [CHANGES_0.5-pre3.md](CHANGES_0.5-pre3.md) и
-[NVIDIA_MEMORY_MODEL.ru.md](NVIDIA_MEMORY_MODEL.ru.md).
+From the first GTX 1660 Ti logs: VRAM copies re-enabled for the module (the sparse-arena
+workaround had disabled them), a shared VRAM budget with the texture cache, headroom for copy
+growth instead of reallocating them, WRITE_DATA writes into the copy, watched blocks
+(`BB_LAYER_WATCH`), file read retry on EFAULT. Details: [CHANGES_0.5-pre3.md](CHANGES_0.5-pre3.md)
+and [NVIDIA_MEMORY_MODEL.md](NVIDIA_MEMORY_MODEL.md).
 
-## 0.5-pre4: компиляция шейдеров в фоне, VRAM на картах 4–6 ГБ, меню как в 0.3
+## 0.5-pre4: background shader compilation, VRAM on 4–6 GB cards, menu as in 0.3
 
-Новые конвейеры проходов, рисуемых каждый кадр, компилируются в фоновых потоках
-(`BB_ASYNC_PIPELINES`); у копий памяти игры в VRAM своя доля бюджета (регрессия pre3 на картах
-4 ГБ); после перемещений VRAM освобождается от копий покинутой локации; меню настроек в игре —
-снова одно окно, как в 0.3 и 0.4. Подробности: [CHANGES_0.5-pre4.md](CHANGES_0.5-pre4.md).
+New pipelines for passes drawn every frame are compiled in background threads
+(`BB_ASYNC_PIPELINES`); game memory copies in VRAM get their own share of the budget (the pre3
+regression on 4 GB cards); after moves, VRAM is freed of the departed location's copies; the
+in-game settings menu — a single window again, as in 0.3 and 0.4. Details:
+[CHANGES_0.5-pre4.md](CHANGES_0.5-pre4.md).

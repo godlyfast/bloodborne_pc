@@ -1,206 +1,210 @@
-# Нативный порт Bloodborne: что сделано и что дальше
+# Bloodborne native port: what is done and what is next
 
-Основной текст — состояние на 2026-09-26; ниже первым разделом — что изменилось к 30.09.
-Самый подробный срез: [CURRENT_STATUS_2026-09-29.md](history/CURRENT_STATUS_2026-09-29.md).
-Отчёт о работе 30.09–01.10 (конвейер GPU, апскейлер, падение, лаунчер, AppImage):
+The main text is as of 2026-09-26; below, the first section covers what changed by 30.09.
+The most detailed snapshot: [CURRENT_STATUS_2026-09-29.md](history/CURRENT_STATUS_2026-09-29.md).
+Report on the work of 30.09–01.10 (GPU pipeline, upscaler, crash, launcher, AppImage):
 [SESSION_2026-09-30.md](history/SESSION_2026-09-30.md).
-Подробности по отдельным темам:
-[parallel_gpu.md](parallel_gpu.md) (многопоточность GPU, подтормаживания при подгрузке),
-[upscaler.md](upscaler.md) (анализ кадра игры, константы сцены).
+Details on individual topics:
+[parallel_gpu.md](parallel_gpu.md) (GPU multithreading, hitches during streaming),
+[upscaler.md](upscaler.md) (analysis of the game's frame, scene constants).
 
-## Обновление 30.09
+## Update 30.09
 
-- Сделано после 26.09: FSR 4 INT8 (v07), векторы движения объектов, смена пресета без
-  перезапуска (уменьшенные цели сцены; глубина D32S8 копируется шейдером), LTO и PGO,
-  масштабирование подготовки draw под число потоков (Steam Deck тоже).
-- Проблемы из раздела «Известные проблемы» ниже: пункт 3 (перезапуск при смене пресета)
-  решён; пункт 1 (векторы объектов) реализован, у FSR 4 остаётся гостинг на персонаже при
-  Ultra Performance; пункт 2 (мыльный интерфейс) — UI рисуется в 1920×1080.
-- Ограничение: уменьшенный рендер сцены (`SceneTargets::Eligible`) требует цель 1920×1080,
-  то есть работает только при выводе 1080p.
-- Распараллеливание потока GPU-команд (шаг 2 [parallel_gpu.md](parallel_gpu.md)): текстуры на
-  отдельном потоке параллельно с буферами работают корректно, но прироста не дают —
-  данные каждого draw переезжают между ядрами. Узкое место — поток GPU-команд: 91% на CPU,
-  ~9% ожидания мелких копий гостевой памяти перед fence. Дальше — двухстадийный конвейер
-  (второй поток владеет текстурным кешем и записью draw, копия регистров из дельт сканера)
-  или мемоизация привязок текстур между кадрами; см. «What would scale» в parallel_gpu.md.
-- **Двухстадийный конвейер draw** (`vk_draw_pipe.h`): поток GPU-команд декодирует PM4 и
-  выбирает пайплайн, второй поток (`bb:DrawRec`) со своей копией регистров привязывает ресурсы
-  и записывает draw. +19% FPS на 16 потоках, +18% на 8 (как Steam Deck). Включён по умолчанию
-  при 8+ потоках (`BB_DRAW_PIPE=0/1`). Узкое место теперь — вторая стадия; подробности и план —
-  в parallel_gpu.md.
-- Пресеты и нагрузка GPU: сцена на RX 7800 XT стоит мало, поэтому пресет меняет время GPU
-  лишь на ~0.5 мс, а сам FSR 4 при выводе 1080p — ~1.4 мс (FSR 4 Ultra Performance дороже
-  нативного рендера без апскейлера). Исправлено: проходы освещения оставались в 1920×1080 при
-  любом пресете (проверка смотрела на чужие слоты целей); уменьшенные цели теперь сэмплируются
-  напрямую, без ресэмплинга в натив (кэш шейдеров пересобирается один раз). Следующее для
-  Steam Deck — гостевая копия памяти целей рендеринга `3d5ebf4e` (см. parallel_gpu.md).
-- **Исправлено падение с конвейером** (порча гостевой кучи, guest offset `0x263b8e7`, через
-  13–17 минут): прерывание «GPU простаивает» уходило раньше меток EOP, отложенных в поток записи
-  Vulkan, и игра освобождала объекты с этими метками. Теперь перед ним конвейер и отложенные
-  метки дожидаются; 2 прогона по 30 минут без падений (до исправления — 7 из 7 падений).
-- **Разрешение вывода 1440p/2160p** (меню «Разрешение вывода», bbport.ini `output_res`, после
-  перезапуска): сцена рисуется в разрешении пресета от выхода, апскейлер (FSR 3 или FSR 4)
-  дорисовывает кадр, интерфейс растеризуется в выходном разрешении. Эффекты игры (аберрация,
-  DoF, размытие, SSAO, сглаживание игры, динамические тени, SSR, заставки, LOD) — там же.
-- **Лаунчер** (`launcher/bb-launcher.sh`, GTK4/libadwaita) и **AppImage** для Steam Deck
-  (`bash packaging/appimage.sh` → `dist/`; данные в `~/.local/share/bbport`, `--play` —
-  запуск без окна лаунчера).
-- Инструменты: `BB_PAD_FILE` (скриптовый ввод геймпада), `ab.sh` (A/B битов
-  `BB_TOGGLE_FILE` в запущенной игре), в `Frame stats` — простой и блокировки потока GPU.
+- Done after 26.09: FSR 4 INT8 (v07), object motion vectors, preset switching without
+  restart (downscaled scene targets; D32S8 depth copied by a shader), LTO and PGO,
+  scaling draw preparation to the number of threads (Steam Deck too).
+- Problems from the "Known problems" section below: item 3 (restart on preset change)
+  solved; item 1 (object vectors) implemented, FSR 4 still has ghosting on the character at
+  Ultra Performance; item 2 (blurry interface) — the UI is drawn at 1920×1080.
+- Limitation: downscaled scene rendering (`SceneTargets::Eligible`) requires a 1920×1080 target,
+  i.e. works only with 1080p output.
+- Parallelizing the GPU-command thread (step 2 of [parallel_gpu.md](parallel_gpu.md)): textures on
+  a separate thread in parallel with buffers work correctly but give no gain —
+  each draw's data moves between cores. The bottleneck is the GPU-command thread: 91% on CPU,
+  ~9% waiting for small guest-memory copies before fences. Next — a two-stage pipeline
+  (a second thread owns the texture cache and draw recording, register copy from the scanner's
+  deltas) or memoizing texture bindings between frames; see "What would scale" in parallel_gpu.md.
+- **Two-stage draw pipeline** (`vk_draw_pipe.h`): the GPU-command thread decodes PM4 and
+  selects the pipeline, a second thread (`bb:DrawRec`) with its own register copy binds resources
+  and records the draw. +19% FPS on 16 threads, +18% on 8 (like Steam Deck). Enabled by default
+  with 8+ threads (`BB_DRAW_PIPE=0/1`). The bottleneck is now the second stage; details and plan
+  are in parallel_gpu.md.
+- Presets and GPU load: the scene on RX 7800 XT costs little, so a preset changes GPU
+  time only by ~0.5 ms, and FSR 4 itself at 1080p output — ~1.4 ms (FSR 4 Ultra Performance is
+  more expensive than native rendering without an upscaler). Fixed: lighting passes remained at
+  1920×1080 at any preset (the check looked at the wrong target slots); downscaled targets are now
+  sampled directly, without resampling to native (the shader cache is rebuilt once). Next for
+  Steam Deck — the guest copy of render-target memory `3d5ebf4e` (see parallel_gpu.md).
+- **Fixed a crash with the pipeline** (guest heap corruption, guest offset `0x263b8e7`, after
+  13–17 minutes): the "GPU idle" interrupt left before the EOP timestamps deferred to the Vulkan
+  recording thread, and the game freed objects with those timestamps. Now the pipeline and the
+  deferred timestamps wait before it; 2 runs of 30 minutes without crashes (before the fix — 7
+  out of 7 crashes).
+- **1440p/2160p output resolution** ("Output resolution" menu, bbport.ini `output_res`, after a
+  restart): the scene is drawn at the preset resolution relative to the output, the upscaler
+  (FSR 3 or FSR 4) finishes the frame, the interface is rasterized at the output resolution.
+  The game's effects (aberration, DoF, blur, SSAO, in-game AA, dynamic shadows, SSR, splash
+  screens, LOD) — there too.
+- **Launcher** (`launcher/bb-launcher.sh`, GTK4/libadwaita) and **AppImage** for Steam Deck
+  (`bash packaging/appimage.sh` → `dist/`; data in `~/.local/share/bbport`, `--play` —
+  launch without the launcher window).
+- Tools: `BB_PAD_FILE` (scripted gamepad input), `ab.sh` (A/B of `BB_TOGGLE_FILE` bits in a
+  running game), in `Frame stats` — idle time and GPU-thread locks.
 
-## Как устроен порт
+## How the port works
 
-- Оригинальный eboot (CUSA03173 v01.09) исполняется напрямую на x86-64. Системные библиотеки
-  PS4 заменены своим HLE-рантаймом на C (`runtime_*.c`, `probe.c`).
-- Графика: видеоядро и рекомпилятор шейдеров shadPS4 (GPL), собранные в `libbbgpu.so`
-  (`gpu/`), с собственными доработками. Эмулятор shadPS4 целиком не используется.
-- Патчи игры (FPS, разрешение и др.) — XML сообщества (`patches/Bloodborne.xml`),
-  компилируются `patches.py` и накладываются загрузчиком при старте.
+- The original eboot (CUSA03173 v01.09) executes directly on x86-64. The PS4 system libraries
+  are replaced by our own HLE runtime in C (`runtime_*.c`, `probe.c`).
+- Graphics: the shadPS4 video core and shader recompiler (GPL), built into `libbbgpu.so`
+  (`gpu/`), with our own modifications. The shadPS4 emulator as a whole is not used.
+- Game patches (FPS, resolution, etc.) are community XML (`patches/Bloodborne.xml`),
+  compiled by `patches.py` and applied by the loader at startup.
 
-## Сделано
+## Done
 
-### Производительность и плавность
+### Performance and smoothness
 
-| Что | Результат |
+| What | Result |
 |---|---|
-| Запись команд Vulkan в отдельном потоке, кеши текстур/буферов, rwlock вместо мьютекса | 26 → 64 FPS в одной сцене |
-| Подготовка draw-вызовов на 4 потоках (`bb:DrawPrep`), проверка на потоке GPU | +11.5% |
-| Окно снятия защиты 256 КиБ при записи игры в память (меньше page fault) | +22% |
-| Кеш описаний текстур, быстрый путь для тех же render target | до ~94 FPS на улице |
-| Копирования гостевой памяти на пуле потоков, пул staging-буферов | фризы при подгрузке 60–170 мс → 40–50 мс |
-| Ожидание копий перед видимыми игре fence | убрано мерцание интерфейса |
-| Режим «Readbacks Relaxed» | нет «взрывов вершин» (FaceGen) |
-| Vblank 480 Гц + лимит кадров до min(монитор, 120), вывод сразу по флипу | ровная подача кадров; бег не замедляется выше 120 FPS |
+| Vulkan command recording in a separate thread, texture/buffer caches, rwlock instead of a mutex | 26 → 64 FPS in one scene |
+| Draw-call preparation on 4 threads (`bb:DrawPrep`), verification on the GPU thread | +11.5% |
+| 256 KiB protection-removal window when the game writes to memory (fewer page faults) | +22% |
+| Texture description cache, fast path for the same render target | up to ~94 FPS outdoors |
+| Guest-memory copies on a thread pool, staging-buffer pool | streaming hitches 60–170 ms → 40–50 ms |
+| Waiting for copies before game-visible fences | removed interface flicker |
+| "Readbacks Relaxed" mode | no "vertex explosions" (FaceGen) |
+| Vblank 480 Hz + frame limit to min(monitor, 120), output right on flip | even frame delivery; running does not slow down above 120 FPS |
 
-Всё переключается во время игры через `BB_TOGGLE_FILE` (битовая маска) для A/B-сравнений.
-Статистика: `BB_FRAME_STATS=1`.
+Everything is toggled during play via `BB_TOGGLE_FILE` (bitmask) for A/B comparisons.
+Statistics: `BB_FRAME_STATS=1`.
 
-### Звук, ввод
+### Sound, input
 
-- Вывод звука с правильным темпом (раньше щелчки каждые 10.7 мс).
-- Геймпад через SDL3, запасная раскладка клавиатуры.
+- Sound output with the correct pacing (previously clicks every 10.7 ms).
+- Gamepad via SDL3, fallback keyboard layout.
 
-### Анализ кадра
+### Frame analysis
 
-- `BB_CAPTURE_TRIGGER=<файл>` записывает один кадр: проходы, цели, шейдеры, текстуры,
-  константы, режимы смешивания.
-- Разобрано устройство кадра Bloodborne (G-buffer, свет, цвет сцены RGBA16F, туман,
-  пост-обработка, тонмаппинг, сглаживание игры, интерфейс) и 864-байтные константы сцены
-  (матрицы вида и проекции).
+- `BB_CAPTURE_TRIGGER=<file>` records one frame: passes, targets, shaders, textures,
+  constants, blend modes.
+- The structure of the Bloodborne frame has been analyzed (G-buffer, lighting, scene color
+  RGBA16F, fog, post-processing, tonemapping, in-game AA, interface) and the 864-byte scene
+  constants (view and projection matrices).
 
-### Временной апскейлер (FSR 3.1)
+### Temporal upscaler (FSR 3.1)
 
-- **Векторы движения камеры**: из глубины сцены и матриц текущего и прошлого кадра
-  (`vk_camera_motion.cpp`, `camera_motion.comp`). Проверены перепроецированием прошлого
-  кадра: статичная геометрия совпадает.
-- **Jitter**: субпиксельный сдвиг геометрии сцены через viewport, последовательность
-  Halton(2,3); число фаз 8·(вывод/рендер)². Интерфейс и пост-обработка не сдвигаются.
-- **FSR 3.1** (FireBurn/FSR-Vulkan, нативный Vulkan, подмодуль `gpu/third_party/fsr-vulkan`):
-  - *Native AA*: на HDR-цвете сцены перед пост-обработкой, 1:1.
-  - *Пресеты Quality/Balanced/Performance/Ultra Performance* (x1.5/1.7/2/3): игра рендерит в
-    пониженном разрешении (патч разрешения, который `patches.py` выводит из патча 720p
-    сообщества), FSR увеличивает готовый кадр до 1920x1080 перед первым проходом интерфейса.
-    Интерфейс и проход вывода перенаправлены в изображения полного размера, презентер
-    показывает их вместо буфера игры.
-- **Маска реактивности** (снимок сцены до прозрачных отрисовок, сравнение перед наложением
-  тумана): работает, но на дымке Bloodborne даёт дрожание — по умолчанию выключена.
-- **Внутриигровое меню** (Dear ImGui, Insert или L3+R3): апскейлер, пресет, резкость,
-  jitter, маска, счётчик FPS. Настройки в `bbport.ini`. Смена пресета — кнопка
-  «Применить и перезапустить игру».
+- **Camera motion vectors**: from scene depth and the current and previous frame matrices
+  (`vk_camera_motion.cpp`, `camera_motion.comp`). Verified by reprojecting the previous
+  frame: static geometry matches.
+- **Jitter**: subpixel shift of scene geometry via the viewport, Halton(2,3) sequence;
+  number of phases 8·(output/render)². Interface and post-processing are not shifted.
+- **FSR 3.1** (FireBurn/FSR-Vulkan, native Vulkan, submodule `gpu/third_party/fsr-vulkan`):
+  - *Native AA*: on the scene's HDR color before post-processing, 1:1.
+  - *Quality/Balanced/Performance/Ultra Performance presets* (x1.5/1.7/2/3): the game renders at
+    a reduced resolution (a resolution patch that `patches.py` derives from the community 720p
+    patch), FSR upscales the finished frame to 1920x1080 before the first interface pass.
+    The interface and the output pass are redirected to full-size images, and the presenter
+    shows them instead of the game's buffer.
+- **Reactivity mask** (a snapshot of the scene before transparent draws, comparison before fog
+  application): works, but on Bloodborne's haze it causes shimmer — off by default.
+- **In-game menu** (Dear ImGui, Insert or L3+R3): upscaler, preset, sharpness,
+  jitter, mask, FPS counter. Settings in `bbport.ini`. Preset change — the
+  "Apply and restart game" button.
 
-## Известные проблемы
+## Known problems
 
-Состояние последнего коммита. В рабочем дереве подготовлен перенос пресетов на уменьшенные
-цели рендера при сохранении гостевых буферов, постобработки и UI в 1920×1080. Переходы
-между пресетами и копирование цвета/глубины/stencil прошли Vulkan-тест на Lavapipe.
-RX 7800 XT не поддерживает blit D32S8, поэтому новый путь оставлял FSR вход 1920×1080
-и снижал FPS. Для таких GPU запуск теперь автоматически выбирает проверенный путь с патчем
-разрешения игры и UI 1920×1080; смена пресета снова требует перезапуска. На GPU с нужной
-поддержкой остаётся переключение без перезапуска. Пункты 2–3 ниже относятся к последнему
-коммиту, до этих изменений рабочего дерева.
+State of the last commit. In the working tree, moving presets to downscaled render targets while
+keeping guest buffers, post-processing and UI at 1920×1080 has been prepared. Transitions
+between presets and color/depth/stencil copying passed a Vulkan test on Lavapipe.
+RX 7800 XT does not support blit D32S8, so the new path left the FSR input at 1920×1080
+and reduced FPS. For such GPUs, startup now automatically selects the proven path with the game
+resolution patch and 1920×1080 UI; a preset change again requires a restart. On GPUs with the
+needed support, switching without a restart remains. Items 2–3 below relate to the last
+commit, before these working-tree changes.
 
-Общий проход векторов движения объектов был слишком дорогим: Performance давал около
-49 FPS с ним и 77–78 FPS без него. Теперь дополнительная цель и шейдеры включаются только
-для G-buffer отрисовок с буфером позы/костей; остальные используют векторы камеры.
-В пробном запуске выборочный путь держал около 81–87 FPS, без пропусков из-за ёмкости
-истории. Векторы объектов включены по умолчанию; `BB_OBJECT_MOTION=0` отключает их, а
-`BB_OBJECT_MOTION_ALL=1` возвращает старый общий путь для сравнения. Выбор по размеру
-буфера пока эвристический: качество оружия и одежды в движении требует проверки в игре.
+A common object motion-vector pass was too expensive: Performance gave about
+49 FPS with it and 77–78 FPS without it. Now the extra target and shaders are enabled only
+for G-buffer draws with a pose/bone buffer; the rest use camera vectors.
+In a trial run, the selective path held about 81–87 FPS, without drops from history
+capacity. Object vectors are on by default; `BB_OBJECT_MOTION=0` disables them, and
+`BB_OBJECT_MOTION_ALL=1` restores the old common path for comparison. Selection by buffer
+size is heuristic for now: the quality of weapon and clothing in motion needs in-game
+verification.
 
-1. **Движущиеся объекты «рассыпаются»** (оружие на спине, персонаж, ткань, враги): есть
-   только векторы движения камеры. Камера от третьего лица следует за персонажем, поэтому
-   векторы камеры для него неверны, и апскейлер берёт историю не из того места. Это касается
-   любого временного апскейлера (FSR 3/4, DLSS, XeSS).
-2. **Интерфейс в пресетах мыльный**: с патчем разрешения игра считает себя 540p-игрой и,
-   судя по всему, готовит шрифты и элементы интерфейса под это разрешение. Меню
-   (титульное, пауза) вообще не проходят через апскейлер.
-3. **Смена пресета требует перезапуска**: разрешение задаётся патчем кода при старте, а
-   буферы игра выделяет один раз.
+1. **Moving objects "fall apart"** (weapon on the back, the character, cloth, enemies): there
+   are only camera motion vectors. The third-person camera follows the character, so
+   camera vectors are wrong for it, and the upscaler takes history from the wrong place. This
+   concerns any temporal upscaler (FSR 3/4, DLSS, XeSS).
+2. **Blurry interface in presets**: with the resolution patch the game considers itself a
+   540p game and, apparently, prepares fonts and interface elements for this resolution. Menus
+   (title, pause) do not go through the upscaler at all.
+3. **Preset change requires a restart**: the resolution is set by a code patch at startup, and
+   the game allocates buffers once.
 
-## План
+## Plan
 
-### 1. Векторы движения объектов
+### 1. Object motion vectors
 
-Нужны всем апскейлерам и генерации кадров. Игра их не считает, поэтому считаем сами.
+Needed by all upscalers and frame generation. The game does not compute them, so we compute
+them ourselves.
 
-Как:
-- Для каждой отрисовки в G-buffer (проходы с 5+ целями) рекомпилятор делает второй вариант
-  вершинного шейдера, который выдаёт позицию дважды: с текущими константами и с константами
-  прошлого кадра. Разница проекций — вектор движения, пишется во вспомогательную цель
-  RG16F как дополнительный выход пиксельного шейдера.
-- Константы прошлого кадра: для каждого draw запоминаем содержимое константных буферов
-  (матрица объекта, кости скелета) по ключу «шейдер + номер draw в проходе» или по адресу
-  данных. Нужно выяснить, как игра хранит матрицы скелета: в буферах, которые перезаписываются
-  каждый кадр (тогда копируем прошлую версию), или в кольцевом буфере (тогда достаточно
-  адреса прошлого кадра).
-- Где объект не найден (первый кадр, новый объект) — векторы камеры, как сейчас.
-- Проверка: отладочный вид векторов (`BB_DEBUG_MOTION`), перепроецирование прошлого кадра
-  по полным векторам, визуально — пила на спине при беге.
+How:
+- For each draw into the G-buffer (passes with 5+ targets) the recompiler makes a second variant
+  of the vertex shader that outputs the position twice: with the current constants and with the
+  previous frame's constants. The difference of the projections is the motion vector, written to
+  an auxiliary RG16F target as an additional pixel-shader output.
+- Previous frame constants: for each draw we remember the contents of the constant buffers
+  (object matrix, skeleton bones) by the key "shader + draw number in the pass" or by data
+  address. We need to find out how the game stores skeleton matrices: in buffers overwritten
+  every frame (then we copy the previous version), or in a ring buffer (then the previous frame's
+  address is enough).
+- Where the object is not found (first frame, new object) — camera vectors, as now.
+- Check: debug vector view (`BB_DEBUG_MOTION`), reprojection of the previous frame with full
+  vectors, visually — the saw on the back while running.
 
-### 2. Масштабирование на уровне рендерера (вместо патча разрешения)
+### 2. Renderer-level scaling (instead of the resolution patch)
 
-Игра работает в 1920x1080 (или в разрешении монитора), а в пониженном разрешении рисуются
-только проходы 3D-сцены. Интерфейс и меню остаются чёткими, пресет меняется на лету.
+The game runs at 1920x1080 (or the monitor resolution), and only the 3D-scene passes are drawn
+at the reduced resolution. The interface and menus stay sharp, the preset changes on the fly.
 
-Как:
-- Кеш текстур выделяет для целей сцены (G-buffer, глубина, свет, цвет сцены, эффекты) копию
-  уменьшенного размера; гостевая память и описания игры не меняются.
-- Viewport и scissor проходов в эти цели масштабируются (как уже сделано для интерфейса,
-  включая проходы с отключённым отсечением).
-- Шейдеры, которые считают по пиксельным координатам (`gl_FragCoord`, `texelFetch`,
-  compute-шейдеры по пикселям), получают коэффициент масштаба через push-константы
-  рекомпилятора. Выборки по нормированным координатам работают без изменений.
-- FSR ставится туда же, где Native AA: цвет сцены перед пост-обработкой (HDR, лучшее
-  качество); пост-обработка и интерфейс идут в полном разрешении.
-- Риски: проходы, читающие цели сцены по пиксельным координатам в пост-обработке, и
-  чтения из гостевой памяти этих целей (их нужно запретить или масштабировать обратно).
+How:
+- The texture cache allocates a downscaled copy for scene targets (G-buffer, depth, lighting,
+  scene color, effects); guest memory and the game's descriptors do not change.
+- Viewport and scissor of passes into these targets are scaled (as already done for the
+  interface, including passes with scissoring disabled).
+- Shaders that compute from pixel coordinates (`gl_FragCoord`, `texelFetch`,
+  compute shaders by pixels) get the scale factor via the recompiler's push constants.
+  Samples by normalized coordinates work unchanged.
+- FSR is placed where Native AA is: scene color before post-processing (HDR, best
+  quality); post-processing and the interface run at full resolution.
+- Risks: passes reading scene targets by pixel coordinates in post-processing, and
+  reads from guest memory of these targets (they must be forbidden or scaled back).
 
-### 3. Другие апскейлеры
+### 3. Other upscalers
 
-Все используют одни и те же входы (цвет, глубина, векторы движения, jitter, маски).
+All use the same inputs (color, depth, motion vectors, jitter, masks).
 
-- **FSR 4 (INT8)**: в FSR-Vulkan есть экспериментальный провайдер FSR 4 v07 INT8 — добавить
-  как вариант в меню и сравнить с FSR 3.1 после шага 1.
-- **DLSS**: нативный Linux Vulkan SDK (NGX). На RX 7800 XT не работает, но нужен для
-  пользователей NVIDIA.
-- **XeSS / XeFG и OptiScaler**: Intel поставляет их только как Windows DLL. Варианты:
-  загрузчик Windows DLL (PE) внутри процесса либо запуск всей сборки под Proton с
-  OptiScaler, которому отдаём входы через интерфейс DLSS.
-  Проверено 29.09: libxess.dll (одинаковая у DOOM: The Dark Ages, PRAGMATA и др.) имеет
-  Vulkan-путь (`xessVKCreateContext`, `xessVKExecute`), но импортирует ~300 функций:
-  MSVCP140 (iostream), VCRUNTIME140 (C++-исключения), UCRT, kernel32, setupapi, dxgi.
-  Решено отложить; самый реалистичный путь — хелпер под Wine с общей памятью Vulkan.
+- **FSR 4 (INT8)**: FSR-Vulkan has an experimental FSR 4 v07 INT8 provider — add it
+  as a menu variant and compare with FSR 3.1 after step 1.
+- **DLSS**: native Linux Vulkan SDK (NGX). Does not work on RX 7800 XT, but needed for
+  NVIDIA users.
+- **XeSS / XeFG and OptiScaler**: Intel ships them only as Windows DLLs. Options:
+  a Windows DLL (PE) loader inside the process, or running the whole build under Proton with
+  OptiScaler, to which we hand the inputs through the DLSS interface.
+  Checked 29.09: libxess.dll (identical in DOOM: The Dark Ages, PRAGMATA and others) has a
+  Vulkan path (`xessVKCreateContext`, `xessVKExecute`), but imports ~300 functions:
+  MSVCP140 (iostream), VCRUNTIME140 (C++ exceptions), UCRT, kernel32, setupapi, dxgi.
+  Decided to postpone; the most realistic path is a helper under Wine with shared Vulkan memory.
 
-### 4. Генерация кадров
+### 4. Frame generation
 
-- FSR 3.1 Frame Generation (есть в FSR-Vulkan): промежуточный кадр между двумя готовыми,
-  по тем же векторам движения; интерфейс нужно рисовать поверх отдельно (есть перенаправление
-  интерфейса — его можно рендерить в отдельный слой).
-- XeFG — после решения с Windows DLL (см. выше).
-- Требование: подача кадров через презентер (очередь и VRR уже работают).
+- FSR 3.1 Frame Generation (present in FSR-Vulkan): an intermediate frame between two finished
+  ones, using the same motion vectors; the interface must be drawn on top separately (there is
+  interface redirection — it can be rendered into a separate layer).
+- XeFG — after the Windows DLL decision (see above).
+- Requirement: frame delivery through the presenter (queue and VRR already work).
 
-### 5. Прочее
+### 5. Miscellaneous
 
-- Steam Deck: портативная сборка (patchelf, без Nix), проверка пресетов на 1280x800.
-- Дальнейшая разгрузка потока GPU (шаг 2 из [parallel_gpu.md](parallel_gpu.md)).
+- Steam Deck: portable build (patchelf, no Nix), checking presets at 1280x800.
+- Further offloading of the GPU thread (step 2 of [parallel_gpu.md](parallel_gpu.md)).

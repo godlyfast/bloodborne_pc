@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
 
     Info info{};
     info.hw_stage=HwStage::Compute; info.sw_stage=SwStage::Compute;
-    info.pgm_hash=BufferCopyShaderHash; info.uses_paged_buffers=true;
+    info.pgm_hash=1; info.uses_paged_buffers=true;
     for (u32 i=0;i<3;++i) {
         BufferResource buffer{};
         buffer.buffer_type=i==2 ? BufferType::BdaPagetable : BufferType::Guest;
@@ -94,6 +94,8 @@ int main(int argc, char** argv) {
     runtime.hw.cs.workgroup_size={1,1,1};
     Profile profile{}; profile.supported_spirv=0x00010600; profile.support_int64=true;
     profile.paged_buffers=true; profile.sparse_page_shift=16;
+    // Synthetic copy shader: write-through is now selected by the game profile.
+    profile.buffer_copy_shader_hash=info.pgm_hash;
     Backend::Bindings bindings{};
     const auto code=Backend::SPIRV::EmitSPIRV(profile,runtime,program,bindings);
     if (argc>1) {

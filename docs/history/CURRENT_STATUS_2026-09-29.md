@@ -1,248 +1,266 @@
-# Bloodborne на ПК: фактическое состояние порта и апскейлера
+# Bloodborne on PC: actual state of the port and the upscaler
 
-Срез на **29 сентября 2026 года**. Источник — файлы в `game_files`, история Git
-`native_probe` до `ac9fe90`, текущие незакоммиченные изменения, сохранённые логи
-запусков и локальные тесты. В документе «есть в коде», «запускалось» и «проверено
-по изображению» не считаются одним и тем же.
+Snapshot as of **September 29, 2026**. Sources — files in `game_files`, the Git
+history of `native_probe` up to `ac9fe90`, current uncommitted changes, saved
+run logs and local tests. In this document, "present in code", "has been
+launched" and "verified by image" are not considered the same thing.
 
-## Краткий итог
+## Short summary
 
-Это работающий экспериментальный **нативный Linux-порт**, а не запуск через
-полный эмулятор: исходный x86-64 `CUSA03173/eboot.bin` исполняется на CPU ПК,
-системные вызовы PS4 обрабатывает собственный HLE-рантайм, графику выводит
-Vulkan-ядро на основе shadPS4. Игра доходит до сцены с персонажем, принимает
-ввод, работает со звуком и сохранениями; это подтверждают логи запуска,
-снимки и видео в корне `native_probe`. Прохождение всей игры, все локации и
-отсутствие сбоев этими материалами **не подтверждены**.
+This is a working experimental **native Linux port**, not a run through a full
+emulator: the original x86-64 `CUSA03173/eboot.bin` executes on the PC CPU,
+PS4 system calls are handled by a custom HLE runtime, and graphics are output
+by a Vulkan core based on shadPS4. The game reaches the character scene,
+accepts input, and works with sound and saves; this is confirmed by run logs,
+screenshots and videos in the `native_probe` root. A full playthrough of the
+game, all locations and the absence of crashes are **not confirmed** by these
+materials.
 
-**FSR 3.1 temporal upscaling реально работает по проверенному пути с разрешением
-сцены, заданным при старте**: лог `логи.md` показывает `960×540 → 1920×1080`,
-компоновку UI в 1920×1080 и запуск на RX 7800 XT. Текущий путь смены пресета
-без перезапуска остаётся проблемным на этой видеокарте: последний
-`last_run.log` показывает переключение запрошенных размеров сцены, но FSR-контекст
-`1920×1080 → 1920×1080`. По коду уменьшенные цели здесь не выбираются, когда
-`D32S8` не поддерживает blit. Следовательно, лог переключения пресетов **не
-доказывает реальное снижение разрешения 3D и выигрыш FPS**.
+**FSR 3.1 temporal upscaling genuinely works on the verified path with the
+scene resolution set at startup**: the `logs.md` log shows `960×540 → 1920×1080`,
+UI composition at 1920×1080 and a run on RX 7800 XT. The current preset
+switching path without a restart remains problematic on this graphics card:
+the latest `last_run.log` shows switching of the requested scene sizes, but an
+FSR context of `1920×1080 → 1920×1080`. From the code, reduced targets are not
+selected here when `D32S8` does not support blit. Therefore, the preset
+switching log **does not prove a real reduction of 3D resolution or an FPS
+gain**.
 
-## Состав проекта и развитие
+## Project layout and development
 
-| Путь | Роль |
+| Path | Role |
 |---|---|
-| `../CUSA03173/` | Локальные файлы игры, `eboot.bin`, ресурсы и модули PS4. |
-| `../np_base/` | Снимок ранней базы порта; рабочая разработка идёт в `native_probe`. |
-| `prepare.py`, `link_libc.py`, `link_modules.py`, `probe.c`, `runtime_*.c` | Подготовка исполняемого образа, привязка модулей, загрузчик и HLE. |
-| `gpu/` | Vulkan-видеоядро, рекомпилятор шейдеров, доработки для игры, FSR и ImGui. Заимствованное ядро shadPS4 описано в `gpu/VENDOR.txt`. |
-| `patches/Bloodborne.xml`, `patches.py` | Патчи FPS и разрешения, применяемые к гостевому коду при старте. |
-| `bbport.ini`, `run.sh`, `build.sh` | Настройки, полный запуск и сборка. |
-| `out/`, `out/dev/`, `last_run.log`, `логи.md` | Собранные бинарники и следы проверок; часть логов относится к более ранним версиям кода. |
+| `../CUSA03173/` | Local game files, `eboot.bin`, PS4 resources and modules. |
+| `../np_base/` | Snapshot of the early port base; active development happens in `native_probe`. |
+| `prepare.py`, `link_libc.py`, `link_modules.py`, `probe.c`, `runtime_*.c` | Executable image preparation, module linking, loader and HLE. |
+| `gpu/` | Vulkan video core, shader recompiler, game-specific fixes, FSR and ImGui. The borrowed shadPS4 core is described in `gpu/VENDOR.txt`. |
+| `patches/Bloodborne.xml`, `patches.py` | FPS and resolution patches applied to guest code at startup. |
+| `bbport.ini`, `run.sh`, `build.sh` | Settings, full launch and build. |
+| `out/`, `out/dev/`, `last_run.log`, `logs.md` | Built binaries and verification traces; some logs relate to earlier code versions. |
 
-Развитие по Git: 25 сентября добавлены загрузчик, HLE, графика, звук и
-оптимизации CPU/GPU; 26 сентября — анализ кадра, векторы камеры, jitter,
-FSR 3.1, пресеты и меню; 27 сентября последний коммит `ac9fe90` исправил
-переключение пресетов и отображение маски. После него в рабочем дереве есть
-незакоммиченные доработки векторов объектов, уменьшенных целей рендера,
-разделения разрешений сцены/UI, скриптов и тестов. Это **текущее рабочее
-дерево**, не готовый релиз. Старые разделы `README.md`, `docs/upscaler.md`
-и `docs/ROADMAP.md` описывают разные этапы и местами уже устарели.
+Development by Git: on September 25 the loader, HLE, graphics, sound and
+CPU/GPU optimizations were added; on September 26 — frame analysis, camera
+vectors, jitter, FSR 3.1, presets and the menu; on September 27 the last
+commit `ac9fe90` fixed preset switching and mask display. After it, the
+working tree contains uncommitted work on object vectors, reduced render
+targets, scene/UI resolution separation, scripts and tests. This is the
+**current working tree**, not a finished release. Older sections of
+`README.md`, `docs/upscaler.md` and `docs/ROADMAP.md` describe different
+stages and are partially outdated.
 
-## Что реализовано
+## What is implemented
 
-### Запуск и производительность
+### Launch and performance
 
-- Гостевой `eboot` и часть оригинальных PRX запускаются вместе с реализациями
-  памяти, потоков, файлов, времени, контроллера, аудио, сохранений и сервисов.
-  Сеть работает в офлайн-режиме; PSN не реализован.
-- SDL3 обслуживает геймпад и запасное управление с клавиатуры. Звук выводится
-  через host-аудиосистему; в коде есть исправление темпа `AudioOut` и флаг
-  сохранения для отсутствовавших звуков.
-- Vulkan-рендерер получил отдельный поток записи команд, подготовку draw на
-  четырёх потоках, кеши текстур и буферов, копирование гостевой памяти и пул
-  staging-буферов. `docs/parallel_gpu.md` и `docs/ROADMAP.md` содержат
-  замеры в отдельных сценах; их нельзя переносить на все конфигурации.
-- `BB_FPS=uncap` по умолчанию применяет патч с шагом симуляции по времени
-  кадра; доступны `30`, `60`, `90`. Частота вывода ограничивается монитором
-  и максимумом 120 FPS. Для диагностики есть `BB_FRAME_STATS=1`,
-  `BB_TOGGLE_FILE` и захват структуры кадра через `BB_CAPTURE_TRIGGER`.
+- The guest `eboot` and some of the original PRX modules run together with
+  implementations of memory, threads, files, time, controller, audio, saves
+  and services. Networking works offline; PSN is not implemented.
+- SDL3 handles the gamepad and fallback keyboard control. Sound is output
+  through the host audio system; the code contains an `AudioOut` tempo fix
+  and a save flag for sounds that were missing.
+- The Vulkan renderer gained a separate command recording thread, draw
+  preparation on four threads, texture and buffer caches, guest memory
+  copying and a staging buffer pool. `docs/parallel_gpu.md` and
+  `docs/ROADMAP.md` contain measurements in individual scenes; they cannot
+  be transferred to all configurations.
+- `BB_FPS=uncap` by default applies a patch with per-frame time simulation
+  stepping; `30`, `60`, `90` are available. Output rate is limited by the
+  monitor and a maximum of 120 FPS. For diagnostics there are
+  `BB_FRAME_STATS=1`, `BB_TOGGLE_FILE` and frame structure capture via
+  `BB_CAPTURE_TRIGGER`.
 
-### Апскейлер
+### Upscaler
 
-- В игре нет готового буфера скорости. Порт вычисляет векторы камеры из
-  глубины и матриц двух кадров; для геометрии сцены делает субпиксельный
-  jitter Halton. Перепроекция статичной геометрии проверялась ранее
+- The game has no ready-made velocity buffer. The port computes camera
+  vectors from depth and matrices of two frames; for scene geometry it does
+  subpixel Halton jitter. Static-geometry reprojection was verified earlier
   (`docs/upscaler.md`).
-- Интегрирован FSR 3.1 через `gpu/third_party/fsr-vulkan`. Native AA работает
-  1:1 на HDR-цвете сцены перед постобработкой. Проверенный режим с пониженным
-  разрешением использует патч гостевого разрешения, FSR после тонмаппинга и
-  отдельную компоновку интерфейса в 1920×1080. Патч UI в текущем дереве
-  оставляет его координаты нативными. Явный `BB_RENDER_RES=ШxВ` включает
-  этот путь; например, лог `логи.md` подтверждает `960x540`.
-- Пресеты в коде: Native AA `1920×1080`, Quality `1280×720`, Balanced
-  `1130×636`, Performance `960×540`, Ultra Performance `640×360` для вывода
-  1920×1080. Меню ImGui открывается `Insert` или `L3+R3`. В `bbport.ini`
-  сохраняются FSR, пресет, резкость, jitter, маска реактивности, режим
-  отладки, векторы объектов и счётчик FPS. Текущий конфиг содержит
+- FSR 3.1 is integrated via `gpu/third_party/fsr-vulkan`. Native AA works
+  1:1 on the scene HDR color before post-processing. The verified
+  reduced-resolution mode uses a guest resolution patch, FSR after tone
+  mapping and separate UI composition at 1920×1080. The UI patch in the
+  current tree keeps its coordinates native. An explicit `BB_RENDER_RES=WxH`
+  enables this path; for example, the `logs.md` log confirms `960x540`.
+- Presets in the code: Native AA `1920×1080`, Quality `1280×720`, Balanced
+  `1130×636`, Performance `960×540`, Ultra Performance `640×360` for
+  1920×1080 output. The ImGui menu opens with `Insert` or `L3+R3`.
+  `bbport.ini` saves FSR, preset, sharpness, jitter, reactive mask, debug
+  mode, object vectors and the FPS counter. The current config contains
   `upscaler=fsr3`, `preset=4`, `jitter=1`, `reactive=1`,
   `object_motion=1`, `debug_view=0`.
-- Маска реактивности формируется сравнением цвета до и после прозрачных
-  проходов. Она опциональна: прежние наблюдения отмечают дрожание тонкой
-  дымки при её включении. Настройка по умолчанию в коде выключена, но
-  в текущем `bbport.ini` включена.
-- В рабочем дереве есть экспериментальные векторы анимированных объектов:
-  прошлые позиции вершин, дополнительная цель G-buffer, сопоставление
-  отрисовок между кадрами и ограничение на подходящие буферы позы/костей.
-  Изменение `object_motion` требует перезапуска. По
-  `out/dev/motion-selective.log` история в выбранных draws часто находится,
-  без пропусков по ёмкости в показанных интервалах. Это метрика draw, **не
-  оценка покрытия пикселей или визуального качества**.
+- The reactive mask is formed by comparing color before and after the
+  transparent passes. It is optional: earlier observations noted thin haze
+  flickering when it is enabled. The default setting in the code is off,
+  but it is enabled in the current `bbport.ini`.
+- The working tree contains experimental animated-object vectors:
+  previous vertex positions, an additional G-buffer target, draw matching
+  between frames and a restriction to suitable pose/bone buffers.
+  Changing `object_motion` requires a restart. According to
+  `out/dev/motion-selective.log`, history in the selected draws is often
+  found, with no capacity skips in the shown intervals. This is a draw
+  metric, **not an assessment of pixel coverage or visual quality**.
 
-## Текущий дефект динамических пресетов
+## Current dynamic preset defect
 
-В `vk_scene_resolution.cpp` функция `SceneTargets::Eligible` требует
-`BlitSrc|BlitDst` у формата каждого кандидата. В `vk_rasterizer.cpp`
-уменьшенный проход отключается, если неподходящая глубина; от неё же зависит
-выбор уменьшенного входа FSR в `vk_temporal_upscaler.cpp`. Сохранённый лог
-для RX 7800 XT сообщает об отсутствии `blit` у `D32S8`. Позднее добавлен
-fallback, который **очищает глубину UI** вместо её копирования, но он не
-устраняет требование `blit` у глубины **3D-сцены**.
+In `vk_scene_resolution.cpp` the `SceneTargets::Eligible` function requires
+`BlitSrc|BlitDst` on the format of each candidate. In `vk_rasterizer.cpp`
+the reduced pass is disabled if the depth is unsuitable; the choice of the
+reduced FSR input in `vk_temporal_upscaler.cpp` also depends on it. The saved
+log for RX 7800 XT reports the absence of `blit` for `D32S8`. A fallback was
+added later that **clears UI depth** instead of copying it, but it does not
+remove the `blit` requirement for **3D scene** depth.
 
-Итог на этой машине: в `last_run.log` 28 сентября перечислены переключения
-`640×360`, `1280×720`, `960×540` и других пресетов, однако созданный
-FSR-контекст остался `1920×1080 → 1920×1080 (HDR scene color)`. Сообщение
-`Scene resolution: raster ...` отражает запрошенный размер proxy-целей;
-оно не измеряет фактически использованный размер каждого draw. Заявления
-`README_FIXES.md` и подсказки меню о работающем на всех GPU динамическом
-масштабировании сильнее, чем позволяют код и последний лог. `логи.md`
-относится к более раннему запуску с автоматическим выбором стартового патча,
-который затем изменили в `run.sh`.
+The result on this machine: the `last_run.log` of September 28 lists switches
+of `640×360`, `1280×720`, `960×540` and other presets, yet the created FSR
+context remained `1920×1080 → 1920×1080 (HDR scene color)`. The
+`Scene resolution: raster ...` message reflects the requested size of the
+proxy targets; it does not measure the actually used size of each draw. The
+claims of `README_FIXES.md` and the menu hints about dynamic scaling working
+on all GPUs are stronger than what the code and the latest log allow.
+`logs.md` relates to an earlier run with automatic startup patch selection,
+which was later changed in `run.sh`.
 
-## Проверки и границы уверенности
+## Verifications and confidence limits
 
-| Проверка | Результат |
+| Check | Result |
 |---|---|
-| Логи игрового запуска и кадры от 27–28 сентября | Загрузка в игровую сцену и вывод изображения подтверждены. Сквозной тест прохождения не проводился. |
-| `логи.md` на RX 7800 XT | Подтверждены патч сцены `960×540`, UI `1920×1080`, FSR-контекст `960×540 → 1920×1080`. |
-| `last_run.log` | Меню меняло пресеты без перезапуска, но FSR был 1:1; FPS-статистики этого запуска нет. |
-| `out/dev/motion-selective.log` | Для одной серии сцен с выборочными векторами объектов видны интервалы примерно 72–100 FPS, без `capacity skips` в приведённых сводках; это не контролируемое сравнение пресетов. |
-| `out/gpu/motion-history-test` и `out/gpu/ui-composition-test` | Повторно выполнены 29 сентября: оба `PASS`. |
-| `nix-shell shell.nix --run 'python3 -m unittest -v test_patches'` | Повторно выполнено 29 сентября: 5 тестов `OK`. |
-| `out/dev/scene-validation.log` | Vulkan-тест уменьшенных целей на Lavapipe **завершился assertion** из-за несовпадения версии заголовков Vulkan и диспетчера. Полной успешной проверки этого пути лог не даёт. |
+| Game run logs and frames from September 27–28 | Loading into the game scene and image output confirmed. No full playthrough test was performed. |
+| `logs.md` on RX 7800 XT | Confirmed scene patch `960×540`, UI `1920×1080`, FSR context `960×540 → 1920×1080`. |
+| `last_run.log` | The menu changed presets without a restart, but FSR was 1:1; no FPS statistics for this run. |
+| `out/dev/motion-selective.log` | For one series of scenes with selective object vectors, intervals of roughly 72–100 FPS are visible, with no `capacity skips` in the given summaries; this is not a controlled preset comparison. |
+| `out/gpu/motion-history-test` and `out/gpu/ui-composition-test` | Re-run on September 29: both `PASS`. |
+| `nix-shell shell.nix --run 'python3 -m unittest -v test_patches'` | Re-run on September 29: 5 tests `OK`. |
+| `out/dev/scene-validation.log` | The Vulkan reduced-targets test on Lavapipe **ended in an assertion** due to a Vulkan headers/dispatcher version mismatch. The log does not provide a fully successful verification of this path. |
 
-Векторы объектов в игре и их эффект на шлейфы оружия и одежды визуально не
-подтверждены систематическим A/B-тестом. Ранние замеры около 49 FPS со
-всеми draws против 77–78 FPS без них и около 81–87 FPS на более узкой
-выборке относятся к разным запускам; это ориентир для дальнейшего теста,
-а не гарантированная производительность текущего конфига. Снимок
-`image_2026-09-28_00-44-14.png` показывает игровую сцену и оверлей около
-59 FPS, но не раскрывает условия замера.
+Object vectors in the game and their effect on weapon and clothing trails
+have not been visually confirmed by a systematic A/B test. Early measurements
+of about 49 FPS with all draws versus 77–78 FPS without them, and about
+81–87 FPS on a narrower selection, belong to different runs; this is a
+guideline for further testing, not a guaranteed performance figure for the
+current config. The screenshot `image_2026-09-28_00-44-14.png` shows a game
+scene and an overlay at about 59 FPS, but does not disclose the measurement
+conditions.
 
-## Что ещё не сделано / что проверять следующим
+## What is not done yet / what to check next
 
-1. Исправить и подтвердить реальный уменьшенный 3D-рендер в динамическом
-   режиме на RX 7800 XT: проверить фактический размер color/depth attachments
-   и FSR-вход на каждом пресете. Если путь остаётся несовместимым с `D32S8`,
-   явно выбирать стартовый патч разрешения и показывать в меню необходимость
-   перезапуска.
-2. После исправления провести одинаковую игровую сцену с Native AA,
-   Quality и Performance: зафиксировать вход/выход FSR, FPS, время кадра,
-   чёткость UI и изображение в движении.
-3. Визуально сравнить векторы объектов включено/выключено при беге, повороте
-   камеры и в бою; проверить шлейфы, покрытие истории и стоимость GPU.
-4. Разобраться с assertion в `scene-resolution-test`; остальные тесты не
-   заменяют игровой Vulkan-тест. Генерации кадров, FSR 4, DLSS и XeSS в
-   текущем порте нет — они перечислены в `docs/ROADMAP.md` как планы.
+1. Fix and confirm real reduced 3D rendering in dynamic mode on RX 7800 XT:
+   check the actual size of color/depth attachments and the FSR input on each
+   preset. If the path remains incompatible with `D32S8`, explicitly select
+   the startup resolution patch and show the restart requirement in the menu.
+2. After the fix, run the same game scene with Native AA, Quality and
+   Performance: record FSR input/output, FPS, frame time, UI sharpness and
+   the image in motion.
+3. Visually compare object vectors on/off while running, turning the camera
+   and in combat; check trails, history coverage and GPU cost.
+4. Sort out the assertion in `scene-resolution-test`; the other tests do not
+   replace the in-game Vulkan test. There is no frame generation, FSR 4,
+   DLSS or XeSS in the current port — they are listed in `docs/ROADMAP.md`
+   as plans.
 
-## Как воспроизвести подтверждённый путь
+## How to reproduce the verified path
 
-Из `game_files` на этой конфигурации:
+From `game_files` on this configuration:
 
 ```bash
 BB_RENDER_RES=960x540 BB_FRAME_STATS=1 bash native_probe/run.sh
 ```
 
-`BB_RENDER_RES` выбирает патч стартового разрешения сцены, а текущий
-`patches.py` сохраняет UI в 1920×1080. Смена разрешения таким способом
-требует нового запуска. Без `BB_RENDER_RES` включается экспериментальный
-динамический путь, описанный выше. Запуск пересобирает порт и использует
-локальные файлы `CUSA03173`; наличие исходников и бинарника само по себе
-не подтверждает воспроизводимость на другом ПК.
+`BB_RENDER_RES` selects the startup scene resolution patch, and the current
+`patches.py` keeps UI at 1920×1080. Changing resolution this way requires a
+new launch. Without `BB_RENDER_RES`, the experimental dynamic path described
+above is enabled. The launch rebuilds the port and uses the local `CUSA03173`
+files; the presence of sources and the binary by itself does not confirm
+reproducibility on another PC.
 
-## Исправление 29 сентября: живая смена пресета
+## September 29 fix: live preset switching
 
-Причин, по которым смена пресета в меню не меняла картинку, было две:
+There were two reasons why changing the preset in the menu did not change
+the picture:
 
-1. `SceneTargets` копировал цели между нативным и уменьшенным размером только
-   через `vkCmdBlitImage`, а RADV не даёт blit для `D32S8`. Поэтому глубина
-   сцены считалась неподходящей и уменьшенный рендер не включался. Теперь для
-   depth/stencil-форматов без blit копирование идёт полноэкранной отрисовкой
-   (`host_shaders/depth_resample.frag`): глубина пишется через `gl_FragDepth`,
-   трафарет через `VK_EXT_shader_stencil_export`.
-2. Маска реактивности (`reactive=1`) снимала цвет в 1920×1080 и пересоздавала
-   FSR-контекст 1920→1920, а основной проход сразу пересоздавал его под
-   уменьшенный вход. Контекст пересоздавался каждый кадр. Теперь маска
-   читает уменьшенную цель сцены.
+1. `SceneTargets` copied targets between native and reduced size only via
+   `vkCmdBlitImage`, and RADV provides no blit for `D32S8`. Therefore scene
+   depth was considered unsuitable and the reduced render was not enabled.
+   Now, for depth/stencil formats without blit, copying is done by a
+   full-screen draw (`host_shaders/depth_resample.frag`): depth is written
+   via `gl_FragDepth`, stencil via `VK_EXT_shader_stencil_export`.
+2. The reactive mask (`reactive=1`) sampled color at 1920×1080 and recreated
+   the FSR context as 1920→1920, while the main pass immediately recreated
+   it for the reduced input. The context was recreated every frame. Now the
+   mask reads the reduced scene target.
 
-Проверка на RX 7800 XT (`out/dyn-res-test.log`): переключения в меню дают
+Verified on RX 7800 XT (`out/dyn-res-test.log`): menu switches produce
 `FSR 3 context 1280x720 / 1130x636 / 960x540 / 640x360 -> 1920x1080`,
-по одному пересозданию на смену пресета, без сбоев. FPS в этой сцене около
-54–56 на всех пресетах, то есть узкое место здесь не в разрешении 3D.
+one recreation per preset change, no crashes. FPS in this scene is about
+54–56 on all presets, meaning the bottleneck here is not the 3D resolution.
 
-## 30 сентября: FSR 4 INT8 и производительность
+## September 30: FSR 4 INT8 and performance
 
 ### FSR 4 (v07 INT8/DOT4)
 
-- `vk_fsr4.cpp/.h`: провайдер FSR-Vulkan `ffxFsr4V07*` с моделью под пресет (native,
-  quality, balanced, performance, ultraperf), тир 1080. Входы те же, что у FSR 3.1.
-  В меню «Апскейлер → FSR 4 (INT8)», в ini `upscaler=fsr4`, env `BB_UPSCALER=fsr4`.
-  Если нет ассетов или возможностей GPU, автоматически включается FSR 3.1.
-- Ассеты: `fetch_fsr4_assets.sh` скачивает набор, собранный Q2RTX из MIT-исходников
-  FidelityFX SDK (`fsr4_shaders/`, в `.gitignore`, 98 SHA-256 сверены с манифестами).
-  `BB_FSR4_DIR` задаёт другой каталог.
-- Устройство: включены `shaderIntegerDotProduct` и `VK_KHR_compute_shader_derivatives`
-  (`Instance::IsFsr4Int8Supported`).
-- Проверено на RX 7800 XT: модели quality/ultraperf создаются, при смене пресета
-  фриз ~6,5 с (компиляция). Пользователь: картинка чётче FSR 3.1, но сильный гостинг
-  на персонаже и оружии. Векторы проверены отладочным видом, они корректны:
-  персонаж получает векторы объекта. В SPIR-V pre-прохода глубина выбирается
-  по минимуму (как у нас), векторы трактуются как «прошлая − текущая». Для A/B
-  в меню: «FSR 4: авто-экспозиция», «FSR 4: обратный знак jitter».
+- `vk_fsr4.cpp/.h`: FSR-Vulkan provider `ffxFsr4V07*` with a per-preset model
+  (native, quality, balanced, performance, ultraperf), 1080 tier. Same inputs
+  as FSR 3.1. In the menu "Upscaler → FSR 4 (INT8)", in ini `upscaler=fsr4`,
+  env `BB_UPSCALER=fsr4`. If assets or GPU capabilities are missing, FSR 3.1
+  is enabled automatically.
+- Assets: `fetch_fsr4_assets.sh` downloads the set assembled by Q2RTX from
+  the MIT-licensed FidelityFX SDK sources (`fsr4_shaders/`, in `.gitignore`,
+  98 SHA-256 sums verified against manifests). `BB_FSR4_DIR` sets a different
+  directory.
+- Device: `shaderIntegerDotProduct` and `VK_KHR_compute_shader_derivatives`
+  are enabled (`Instance::IsFsr4Int8Supported`).
+- Verified on RX 7800 XT: quality/ultraperf models are created; a preset
+  change freezes for ~6.5 s (compilation). User report: the picture is
+  sharper than FSR 3.1, but there is heavy ghosting on the character and
+  weapon. Vectors verified with the debug view, they are correct: the
+  character gets object vectors. In the pre-pass SPIR-V, depth is selected
+  by minimum (as in our code), vectors are treated as "previous − current".
+  For A/B in the menu: "FSR 4: auto-exposure", "FSR 4: inverted jitter sign".
 
-### Производительность (perf, поток GPU-команд)
+### Performance (perf, GPU command thread)
 
-- `SceneTargets::Eligible` спрашивал у драйвера свойства формата на каждую отрисовку:
-  ~13–15% времени потока GPU. Теперь кеш по формату.
-- `ObjectMotion::Attach`, снимок цвета и маска реактивности вызывали
-  `Scheduler::CommandBuffer()`. Это переводило запись всего остатка сабмита (почти
-  весь G-buffer) на поток GPU. Теперь они идут через `Scheduler::Record`.
-  Остались два прямых вызова в конце кадра (`TemporalUpscaler::Run`, презентер).
-- Итог: поток GPU ~74% вместо ~94% одного ядра. В игровых сценах 61–98 FPS против
-  53–87 до исправлений (сцены не совпадают один в один, это ориентир).
+- `SceneTargets::Eligible` asked the driver for format properties on every
+  draw: ~13–15% of the GPU thread time. Now there is a per-format cache.
+- `ObjectMotion::Attach`, the color snapshot and the reactive mask called
+  `Scheduler::CommandBuffer()`. This moved recording of the entire rest of
+  the submit (almost the whole G-buffer) onto the GPU thread. Now they go
+  through `Scheduler::Record`. Two direct calls remain at the end of the
+  frame (`TemporalUpscaler::Run`, presenter).
+- Result: GPU thread ~74% instead of ~94% of one core. In game scenes
+  61–98 FPS versus 53–87 before the fixes (scenes do not match one-to-one,
+  this is a guideline).
 
-### Профиль с DWARF-стеком (perf, поток GPU-команд, 30.09)
+### DWARF-stack profile (perf, GPU command thread, 09.30)
 
-- `Motion::IndexedRange` (скан и хеш индексов для векторов объектов) занимал ~10% потока
-  GPU. Добавлен `Motion::IndexRangeCache`: результат переиспользуется и полностью
-  перепроверяется раз в 32 кадра. В игре ~98% диапазонов из кеша (260 записей).
-- `SceneTargets`: плоская таблица свойств форматов и память последних восьми целей;
-  вместе с Attachment/Get/View/Eligible ~4% вместо ~7%.
-- После этого поток GPU загружен работой без заметных ожиданий. Поток записи Vulkan
-  ~40% работы и ~57% ожидания. GPU (RX 7800 XT) в среднем ~65% занятости.
-  Ограничивает кадр поток GPU-команд. Главные статьи — базовые затраты видеоядра:
-  FindView ~5,6%, BindTextures ~5,6%, memmove ~4,6%, SmallGuestCopy ~3,5%,
-  CachedImageDescEntry ~3,2%, BindBuffers/BindVertexBuffers ~3% каждая.
-  Следующий шаг — перенос этих вычислений на рабочие потоки (шаг 2 parallel_gpu.md).
+- `Motion::IndexedRange` (index scan and hash for object vectors) took ~10%
+  of the GPU thread. Added `Motion::IndexRangeCache`: the result is reused
+  and fully re-verified every 32 frames. In game ~98% of ranges come from
+  the cache (260 entries).
+- `SceneTargets`: flat table of format properties and memory of the last
+  eight targets; together with Attachment/Get/View/Eligible ~4% instead of ~7%.
+- After this the GPU thread is busy with work without noticeable waits. The
+  Vulkan recording thread ~40% work and ~57% waiting. The GPU (RX 7800 XT)
+  is ~65% busy on average. The frame is limited by the GPU command thread.
+  The main entries are the video core base costs: FindView ~5.6%,
+  BindTextures ~5.6%, memmove ~4.6%, SmallGuestCopy ~3.5%,
+  CachedImageDescEntry ~3.2%, BindBuffers/BindVertexBuffers ~3% each.
+  The next step is moving these computations to worker threads (step 2 of
+  parallel_gpu.md).
 
-### FSR 4: гостинг на персонаже и оружии (30.09, повторная проверка)
+### FSR 4: ghosting on the character and weapon (09.30, re-verification)
 
-Видео `video_2026-09-30_03-43-12.mp4`: FSR 4, Ultra Performance (640×360 → 1920×1080). За
-движущимся диском пилы остаётся тёмный отпечаток на открывшемся фоне. Проверено:
+Video `video_2026-09-30_03-43-12.mp4`: FSR 4, Ultra Performance (640×360 → 1920×1080).
+A dark imprint remains behind the moving saw disc on the revealed background.
+Verified:
 
-- отладочный вид векторов (FSR 4): персонаж и оружие получают векторы объекта;
-- кеш диапазонов индексов не устаревает (0 изменений при перепроверках);
-- последовательность jitter совпадает с провайдером (Halton 2/3, ceil(8·ratio²) фаз);
-- A/B в одном запуске с выключенными оптимизациями после 29.09 (биты 4096, 8192, 1<<30):
-  шлейфы одинаковые в обеих фазах, то есть это не регрессия от них. Попутно: эти
-  оптимизации вместе дают 84,4 против 70,8 FPS при беге (+19%).
+- vector debug view (FSR 4): the character and weapon get object vectors;
+- the index range cache does not go stale (0 changes on re-verifications);
+- the jitter sequence matches the provider (Halton 2/3, ceil(8·ratio²) phases);
+- A/B in one run with the post-09.29 optimizations disabled (bits 4096, 8192,
+  1<<30): trails are identical in both phases, so this is not a regression
+  from them. Incidentally: these optimizations together give 84.4 versus
+  70.8 FPS while running (+19%).
 
-Модель v07 определяет открывшийся фон по цвету (глубина используется только для расширения
-векторов), и при входе 640×360 ей мало информации. FSR 3.1 отбрасывает такую историю по
-глубине, поэтому на Ultra Performance шлейфов у него меньше.
+The v07 model determines revealed background by color (depth is used only for
+vector dilation), and at a 640×360 input it has too little information.
+FSR 3.1 discards such history by depth, so it has fewer trails on Ultra
+Performance.

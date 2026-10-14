@@ -5,8 +5,6 @@
 Picks the game folder, edits the port's settings (bbport.ini: upscaler, preset, ...) and the
 start-up tweaks passed as environment variables to run.sh, starts and stops the game and shows
 its output. Launcher settings live in ~/.config/bbport-launcher/settings.json.
-Russian, English, Brazilian Portuguese and Simplified Chinese (bbport_i18n: the Russian
-text is the key).
 """
 
 import json
@@ -20,7 +18,6 @@ import sys
 import time
 from pathlib import Path
 from bbport_assets import fsr411_problem
-from bbport_i18n import language, set_language, tr
 
 import gi
 
@@ -43,11 +40,11 @@ MAX_LOG_LINES = 5000
 # The memory model (run.sh: BB_PC_MODEL): "auto" leaves it to the GPU (the new one on AMD, the
 # 0.3 one elsewhere), or either by hand. The new one goes through the layer's memory module on
 # every GPU (no sparse binding of the game's memory; BB_LAYER_MEMORY=0: AMD's sparse arena).
-PC_MODEL_SUBTITLE = ("Новая: видеокарта работает с памятью игры напрямую, как в игре для ПК, а команды "
-                     "графики переводятся, а не эмулируются. Старая — модель памяти 0.3 со всеми "
-                     "исправлениями. Если драйвер не проходит проверку при запуске — старая")
-MEMORY_MODELS = [("Авто: новая на AMD, старая на других", "auto"), ("Новая", "new"),
-                 ("Старая (как в 0.3)", "old")]
+PC_MODEL_SUBTITLE = ("The new one: the GPU works with the game's memory directly, as in a PC game, and graphics "
+                     "commands are translated rather than emulated. The old one: the memory model of 0.3 with all "
+                     "the fixes. If the driver fails the startup check, the old one")
+MEMORY_MODELS = [("Auto: new on AMD, old on others", "auto"), ("New", "new"),
+                 ("Old (as in 0.3)", "old")]
 # FSR 4.1.1 assets built from the user's AMD DLL (tools/fsr4cap, also in the package).
 FSR4CAP_DIR = PORT_DIR / "tools" / "fsr4cap"
 sys.path.insert(0, str(FSR4CAP_DIR))
@@ -61,64 +58,60 @@ PACKAGE_ONLY_ENV = (
 )
 # build_assets.sh exit statuses (see there).
 FSR411_BUILD_ERRORS = {
-    2: "DLL не подходит: подробности в журнале",
-    3: ("Не найден подходящий Proton: установите GE-Proton 10 или новее (ProtonUp-Qt) или Proton "
-        "Experimental / Proton-CachyOS в Steam. Если они есть — запустите в Steam любую игру с "
-        "этим Proton, чтобы Steam поставил его рантайм"),
-    4: "Не хватает программ для сборки: список в журнале",
-    5: ("Ни один Proton не запустил FSR 4.1 из этой DLL. Либо они слишком старые (подходят "
-        "GE-Proton 10+, Proton Experimental, Proton-CachyOS 11), либо DLL не включает FSR 4.1 на "
-        "этой видеокарте (Steam Deck?): тогда соберите на ПК с Radeon RX 7000/9000 и скопируйте "
-        "папку fsr4_411. Подробности в журнале"),
-    6: ("Записанные проходы не совпали с тем, что повторяет bbport (другая версия DLL или "
-        "новая видеокарта?): подробности в журнале"),
-    7: "Не найден загрузчик FidelityFX 2.x",
-    8: ("На NixOS запись идёт на самой системе (systemd --user) через umu-launcher из nix-shell, "
-        "а здесь их не нашлось: установите umu-launcher или Nix. Подробности в журнале"),
+    2: "The DLL does not fit: details in the log",
+    3: ("No suitable Proton found: install GE-Proton 10 or newer (ProtonUp-Qt), or Proton Experimental / "
+        "Proton-CachyOS in Steam. If you have them, start any game with that Proton in Steam so that Steam "
+        "installs its runtime"),
+    4: "Tools for the build are missing: the list is in the log",
+    5: ("No Proton started this DLL's FSR 4.1. Either they are too old (GE-Proton 10+, Proton Experimental, "
+        "Proton-CachyOS 11 work), or the DLL does not enable FSR 4.1 on this GPU (Steam Deck?): then build on a "
+        "PC with a Radeon RX 7000/9000 and copy the fsr4_411 folder. Details in the log"),
+    6: ("The recorded passes do not match what bbport replays (another DLL version, or a new GPU?): details in "
+        "the log"),
+    7: "No FidelityFX loader 2.x found",
+    8: ("On NixOS the recording runs on the system itself (systemd --user) with umu-launcher from nix-shell, and "
+        "neither was found: install umu-launcher or Nix. Details in the log"),
 }
 
-# Choices: (label, value). The first entry is the default. Labels are translated when shown.
-UI_LANGUAGES = [("Как в системе", ""), ("Русский", "ru"), ("English", "en"), ("Português (Brasil)", "pt_BR"),
-                ("简体中文", "zh_CN")]
+# Choices: (label, value). The first entry is the default.
 UPSCALERS = [("FSR 4", "fsr4"), ("FSR 4.1.1", "fsr411"), ("FSR 3", "fsr3"),
              ("DLSS (NVIDIA RTX)", "dlss"),
-             ("TAA (нативное сглаживание)", "taa"), ("Выключен", "off")]
+             ("TAA (native anti-aliasing)", "taa"), ("Off", "off")]
 PRESETS = [("Native AA", 0), ("Quality (x1.5)", 1), ("Balanced (x1.7)", 2),
            ("Performance (x2)", 3), ("Ultra Performance (x3)", 4)]
 OUTPUT_RES = [("1280×720 (Steam Deck)", "1280x720"), ("1920×1080", "1920x1080"), ("2560×1440", "2560x1440"), ("3840×2160", "3840x2160")]
 # Game effects (patches applied at start): bbport.ini key, title, default.
 EFFECTS = [
-    ("effect_chromatic_aberration", "Хроматическая аберрация", True),
-    ("effect_dof", "Глубина резкости (DoF)", True),
-    ("effect_motion_blur", "Размытие в движении", True),
-    ("effect_ssao", "Затенение SSAO", True),
-    ("effect_game_aa", "Собственное сглаживание игры", True),
-    ("effect_dynamic_shadows", "Тени от динамических источников", True),
-    ("effect_ssr", "Отражения SSR (не было в игре)", False),
-    ("skip_intro", "Пропуск заставок при запуске", False),
-    ("debug_camera", "Свободная камера (Cross + L3 / Space + Z)", False),
-    ("debug_menu", "Debug menu (левый touchpad / Tab; нужны шрифты)", False),
+    ("effect_chromatic_aberration", "Chromatic aberration", True),
+    ("effect_dof", "Depth of field (DoF)", True),
+    ("effect_motion_blur", "Motion blur", True),
+    ("effect_ssao", "SSAO", True),
+    ("effect_game_aa", "The game's own anti-aliasing", True),
+    ("effect_dynamic_shadows", "Dynamic light shadows", True),
+    ("effect_ssr", "SSR reflections (not in the original game)", False),
+    ("skip_intro", "Skip the intro videos", False),
+    ("debug_camera", "Free camera (Cross + L3 / Space + Z)", False),
+    ("debug_menu", "Debug menu (left touchpad / Tab; needs fonts)", False),
 ]
-MODEL_LOD = [("Как в игре", "0"), ("Максимальная (-2)", "-2"), ("Ниже (1)", "1"),
-             ("Минимальная (2)", "2")]
-FPS_MODES = [("Без ограничения (патч)", "uncap"), ("60", "60"), ("90", "90"),
-             ("30 (как на PS4)", "30")]
+MODEL_LOD = [("As in the game", "0"), ("Highest (-2)", "-2"), ("Lower (1)", "1"),
+             ("Lowest (2)", "2")]
+FPS_MODES = [("Unlocked (patch)", "uncap"), ("60", "60"), ("90", "90"),
+             ("30 (as on PS4)", "30")]
 PRESENT_MODES = [("Mailbox", "Mailbox"), ("FIFO (VSync)", "Fifo"),
                  ("FIFO Relaxed", "FifoRelaxed"), ("Immediate", "Immediate")]
 # A third element is a note shown under the row's title while that choice is selected: the
 # choice labels stay short, so the selected one is shown in full.
-DRAW_PIPE = [("Авто", "", "Включён при 8 и более потоках процессора"), ("Включён", "1"),
-             ("Выключен", "0", "Стабильнее, но медленнее")]
-LANGUAGES = [("Английский", "1"), ("Русский", "8"), ("Японский", "0"), ("Французский", "2"),
-             ("Испанский", "3"), ("Немецкий", "4"), ("Итальянский", "5")]
-LIVE_RESOLUTION = [("Авто (по видеокарте)", "auto"), ("Выключена (быстрее)", "0"), ("Включена", "1")]
-READBACKS = [("Relaxed", "", "По умолчанию"), ("Выключены", "0"), ("Precise", "2")]
+DRAW_PIPE = [("Auto", "", "On with 8 or more CPU threads"), ("On", "1"),
+             ("Off", "0", "More stable, but slower")]
+LANGUAGES = [("English", "1"), ("Russian", "8"), ("Japanese", "0"), ("French", "2"),
+             ("Spanish", "3"), ("German", "4"), ("Italian", "5")]
+LIVE_RESOLUTION = [("Auto (by GPU)", "auto"), ("Off (faster)", "0"), ("On", "1")]
+READBACKS = [("Relaxed", "", "Default"), ("Off", "0"), ("Precise", "2")]
 # Background pre-upload of the game's GPU memory into VRAM (BB_PREUPLOAD): auto = on with a discrete GPU.
-PREUPLOAD = [("Обычная", "", "Без лишней видеопамяти"), ("Полная", "2", "Около 3 ГБ видеопамяти сверху"),
-             ("Выключена", "0")]
+PREUPLOAD = [("Normal", "", "No extra VRAM"), ("Full", "2", "About 3 GB more VRAM"),
+             ("Off", "0")]
 
 DEFAULTS = {
-    "ui_language": "",
     "game_dir": "" if PACKAGED else str(PORT_DIR.parent / "CUSA03173"),
     "user_dir": "",
     "mods_dir": "",
@@ -299,8 +292,6 @@ def game_environment(s):
     env["BB_PATCHES_DIR"] = str(patches_dir(s))
     env["BB_PATCHES_CONFIG"] = str(DATA_DIR / "patches.json")
     env["BB_LANGUAGE"] = s["language"]
-    # The in-game menu speaks the launcher's language until one is chosen in it (menu_language).
-    env["BB_MENU_LANGUAGE"] = language()
     env["BB_FULLSCREEN"] = "1" if s["fullscreen"] else "0"
     env["BB_PRESENT_MODE"] = s["present_mode"]
     if s.get("gamepad"):
@@ -377,10 +368,10 @@ def open_folder(window, path):
 
 
 def combo_row(title, subtitle, choices, current):
-    model = Gtk.StringList.new([tr(choice[0]) for choice in choices])
+    model = Gtk.StringList.new([choice[0] for choice in choices])
     row = Adw.ComboRow(title=title, model=model)
     values = [choice[1] for choice in choices]
-    notes = [tr(choice[2]) if len(choice) > 2 else None for choice in choices]
+    notes = [choice[2] if len(choice) > 2 else None for choice in choices]
 
     def show_note(*_):
         lines = [line for line in (subtitle, notes[row.get_selected()]) if line]
@@ -401,10 +392,10 @@ def combo_value(row):
 # bbport.ini key.<input>= / pad.<input>= replace a default; no line keeps it. Mouse buttons and the
 # wheel are keys ("Mouse Left", "Wheel Down"); they act while the game holds the mouse.
 CONTROLS = [
-    ("cross", "Крест", "Space", "a"),
-    ("circle", "Круг", "Left Shift", "b"),
-    ("square", "Квадрат", "E", "x"),
-    ("triangle", "Треугольник", "Q", "y"),
+    ("cross", "Cross", "Space", "a"),
+    ("circle", "Circle", "Left Shift", "b"),
+    ("square", "Square", "E", "x"),
+    ("triangle", "Triangle", "Q", "y"),
     ("l1", "L1", "1, Mouse X2", "leftshoulder"),
     ("r1", "R1", "3, Mouse Left", "rightshoulder"),
     ("l2", "L2", "R, Mouse Right", "lefttrigger"),
@@ -412,20 +403,20 @@ CONTROLS = [
     ("l3", "L3", "Z", "leftstick"),
     ("r3", "R3", "C, Mouse Middle", "rightstick"),
     ("options", "Options", "Return", "start"),
-    ("touchpad", "Тачпад, левая половина (жесты)", "Tab", "back, touchpad"),
-    ("touchpad_right", "Тачпад, правая половина (личные вещи)", "Backspace", ""),
-    ("up", "Крестовина вверх", "I, Wheel Up", "dpup"),
-    ("down", "Крестовина вниз", "K, Wheel Down", "dpdown"),
-    ("left", "Крестовина влево", "J", "dpleft"),
-    ("right", "Крестовина вправо", "L", "dpright"),
-    ("move_up", "Движение вперёд", "W", None),
-    ("move_down", "Движение назад", "S", None),
-    ("move_left", "Движение влево", "A", None),
-    ("move_right", "Движение вправо", "D", None),
-    ("look_up", "Камера вверх", "Up", None),
-    ("look_down", "Камера вниз", "Down", None),
-    ("look_left", "Камера влево", "Left", None),
-    ("look_right", "Камера вправо", "Right", None),
+    ("touchpad", "Touchpad, left half (gestures)", "Tab", "back, touchpad"),
+    ("touchpad_right", "Touchpad, right half (key items)", "Backspace", ""),
+    ("up", "D-pad up", "I, Wheel Up", "dpup"),
+    ("down", "D-pad down", "K, Wheel Down", "dpdown"),
+    ("left", "D-pad left", "J", "dpleft"),
+    ("right", "D-pad right", "L", "dpright"),
+    ("move_up", "Move forward", "W", None),
+    ("move_down", "Move back", "S", None),
+    ("move_left", "Move left", "A", None),
+    ("move_right", "Move right", "D", None),
+    ("look_up", "Camera up", "Up", None),
+    ("look_down", "Camera down", "Down", None),
+    ("look_left", "Camera left", "Left", None),
+    ("look_right", "Camera right", "Right", None),
 ]
 
 
@@ -450,7 +441,7 @@ def connected_displays():
     rows = [line.split("\t") for line in run.stdout.splitlines() if line.count("\t") == 2]
     names = [name for name, _, _ in rows]
     return [(name if names.count(name) == 1 else str(number),
-             f"{number}: {name} ({size})" + (tr(", основной") if primary == "1" else ""))
+             f"{number}: {name} ({size})" + (", primary" if primary == "1" else ""))
             for number, (name, size, primary) in enumerate(rows, 1)]
 
 
@@ -476,7 +467,6 @@ class LauncherWindow(Adw.ApplicationWindow):
         super().__init__(application=app, title="Bloodborne")
         self.set_default_size(760, 820)
         self.settings = load_settings()
-        set_language(self.settings.get("ui_language", ""))
         self.ini, self.ini_lines = load_ini()
         self.process = None
         self.stream = None
@@ -485,7 +475,7 @@ class LauncherWindow(Adw.ApplicationWindow):
         self.connect("close-request", self.on_close)
 
     def build(self):
-        """(Re)creates the window's content in the current launcher language."""
+        """(Re)creates the window's content."""
         toolbar = Adw.ToolbarView()
         header = Adw.HeaderBar()
         self.stack = Adw.ViewStack()
@@ -502,11 +492,11 @@ class LauncherWindow(Adw.ApplicationWindow):
         self.set_content(toolbar)
 
         log_text = self.log_text() if hasattr(self, "log_view") else ""
-        self.stack.add_titled_with_icon(self.build_settings_page(), "settings", tr("Настройки"),
+        self.stack.add_titled_with_icon(self.build_settings_page(), "settings", "Settings",
                                         "preferences-system-symbolic")
-        self.stack.add_titled_with_icon(self.build_online_page(), "online", tr("Онлайн"),
+        self.stack.add_titled_with_icon(self.build_online_page(), "online", "Online",
                                         "network-workgroup-symbolic")
-        self.stack.add_titled_with_icon(self.build_log_page(), "log", tr("Журнал"),
+        self.stack.add_titled_with_icon(self.build_log_page(), "log", "Log",
                                         "utilities-terminal-symbolic")
         self.log_view.get_buffer().set_text(log_text)
         self.update_launch_button()
@@ -516,7 +506,7 @@ class LauncherWindow(Adw.ApplicationWindow):
 
     def update_launch_button(self):
         running = self.process is not None
-        self.launch_button.set_label(tr("Остановить") if running else tr("Запустить"))
+        self.launch_button.set_label("Stop" if running else "Play")
         self.launch_button.remove_css_class("destructive-action" if not running else "suggested-action")
         self.launch_button.add_css_class("destructive-action" if running else "suggested-action")
         # The game and an FSR 4.1.1 build do not run together (both want the GPU, the build
@@ -530,60 +520,53 @@ class LauncherWindow(Adw.ApplicationWindow):
     def build_settings_page(self):
         page = Adw.PreferencesPage()
 
-        launcher = Adw.PreferencesGroup()
-        self.ui_language_row = combo_row(tr("Язык лаунчера") + " / Launcher language", None,
-                                         UI_LANGUAGES, self.settings.get("ui_language", ""))
-        self.ui_language_row.connect("notify::selected", self.on_ui_language)
-        launcher.add(self.ui_language_row)
-        page.add(launcher)
-
-        game = Adw.PreferencesGroup(title=tr("Игра"))
-        self.game_row = Adw.ActionRow(title=tr("Папка игры (CUSA03173)"))
+        game = Adw.PreferencesGroup(title="Game")
+        self.game_row = Adw.ActionRow(title="Game folder (CUSA03173)")
         self.game_status = Gtk.Image()
         self.game_row.add_suffix(self.game_status)
-        self.game_row.add_suffix(flat_button("folder-open-symbolic", tr("Выбрать папку с eboot.bin"),
+        self.game_row.add_suffix(flat_button("folder-open-symbolic", "Choose the folder with eboot.bin",
                                              self.on_choose_game))
         self.game_row.add_suffix(flat_button("system-file-manager-symbolic",
-                                             tr("Открыть в файловом менеджере"),
+                                             "Open in the file manager",
                                              lambda _b: open_folder(self, self.game_dir())))
         game.add(self.game_row)
         # Saves and the shader cache: user/ in the data directory unless chosen.
-        self.user_row = Adw.ActionRow(title=tr("Папка сохранений"))
+        self.user_row = Adw.ActionRow(title="Saves folder")
         self.user_status = Gtk.Image()
         self.user_row.add_suffix(self.user_status)
-        self.user_row.add_suffix(flat_button("folder-open-symbolic", tr("Выбрать папку сохранений"),
+        self.user_row.add_suffix(flat_button("folder-open-symbolic", "Choose the saves folder",
                                              self.on_choose_user))
         self.user_row.add_suffix(flat_button("system-file-manager-symbolic",
-                                             tr("Открыть в файловом менеджере"),
+                                             "Open in the file manager",
                                              lambda _b: open_folder(self, self.user_dir())))
-        self.user_reset = flat_button("edit-undo-symbolic", tr("Вернуть папку по умолчанию"),
+        self.user_reset = flat_button("edit-undo-symbolic", "Back to the default folder",
                                       self.on_reset_user)
         self.user_row.add_suffix(self.user_reset)
         game.add(self.user_row)
-        self.language_row = combo_row(tr("Язык системы"), None, LANGUAGES, self.settings["language"])
+        self.language_row = combo_row("System language", None, LANGUAGES, self.settings["language"])
         game.add(self.language_row)
         page.add(game)
 
         # Auto: the new memory model on AMD, the 0.3 one elsewhere; or either by hand.
-        mode = Adw.PreferencesGroup(title=tr("Режим работы"))
-        self.memory_model_row = combo_row(tr("Модель памяти и трансляции"), tr(PC_MODEL_SUBTITLE),
+        mode = Adw.PreferencesGroup(title="Mode")
+        self.memory_model_row = combo_row("Memory and translation model", PC_MODEL_SUBTITLE,
                                           MEMORY_MODELS, self.settings.get("memory_model", "auto"))
         mode.add(self.memory_model_row)
         page.add(mode)
 
         self.mods_group = Adw.PreferencesGroup(
-            title=tr("Моды"), description=tr(
-                "Распакуйте каждый мод в отдельную папку (с dvdroot_ps4 или сразу с chr/, parts/ и т. п.). "
-                "При совпадении файлов побеждает мод ниже в списке. Применяется при запуске."))
-        self.mods_enabled_row = Adw.SwitchRow(title=tr("Загружать моды"),
+            title="Mods", description=("Extract each mod into its own folder (with dvdroot_ps4, or chr/, "
+                                               "parts/, ... directly). When files collide, the mod lower in the "
+                                               "list wins. Applied at start."))
+        self.mods_enabled_row = Adw.SwitchRow(title="Load mods",
                                                active=self.settings["mods_enabled"])
         self.mods_group.add(self.mods_enabled_row)
-        self.mods_folder_row = Adw.ActionRow(title=tr("Папка модов"))
-        self.mods_folder_row.add_suffix(flat_button("folder-open-symbolic", tr("Выбрать папку модов"),
+        self.mods_folder_row = Adw.ActionRow(title="Mods folder")
+        self.mods_folder_row.add_suffix(flat_button("folder-open-symbolic", "Choose the mods folder",
                                                     self.on_choose_mods))
-        self.mods_folder_row.add_suffix(flat_button("system-file-manager-symbolic", tr("Открыть папку модов"),
+        self.mods_folder_row.add_suffix(flat_button("system-file-manager-symbolic", "Open the mods folder",
                                                     lambda _b: open_folder(self, self.mods_dir())))
-        self.mods_folder_row.add_suffix(flat_button("view-refresh-symbolic", tr("Обновить список"),
+        self.mods_folder_row.add_suffix(flat_button("view-refresh-symbolic", "Refresh the list",
                                                     self.on_refresh_mods))
         self.mods_group.add(self.mods_folder_row)
         self.mod_list = FolderList(self.mods_group)
@@ -591,70 +574,69 @@ class LauncherWindow(Adw.ApplicationWindow):
         page.add(self.mods_group)
 
         self.patches_group = Adw.PreferencesGroup(
-            title=tr("Сторонние патчи"),
-            description=tr("XML-патчи в формате shadPS4 для версии 01.09 из папки патчей. "
-                           "Применяются при запуске."))
-        self.patches_folder_row = Adw.ActionRow(title=tr("Папка патчей"))
-        self.patches_folder_row.add_suffix(flat_button("folder-open-symbolic", tr("Выбрать папку патчей"),
+            title="Third-party patches",
+            description="shadPS4-format XML patches for version 01.09 from the patches folder. Applied at start.")
+        self.patches_folder_row = Adw.ActionRow(title="Patches folder")
+        self.patches_folder_row.add_suffix(flat_button("folder-open-symbolic", "Choose the patches folder",
                                                        self.on_choose_patches))
         self.patches_folder_row.add_suffix(flat_button(
-            "system-file-manager-symbolic", tr("Открыть папку патчей"),
+            "system-file-manager-symbolic", "Open the patches folder",
             lambda _b: open_folder(self, patches_dir(self.settings))))
-        self.patches_folder_row.add_suffix(flat_button("view-refresh-symbolic", tr("Обновить список"),
+        self.patches_folder_row.add_suffix(flat_button("view-refresh-symbolic", "Refresh the list",
                                                        self.on_refresh_patches))
         self.patches_group.add(self.patches_folder_row)
         self.patch_list = FolderList(self.patches_group)
         self.refresh_patches()
         page.add(self.patches_group)
 
-        screen = Adw.PreferencesGroup(title=tr("Экран"))
-        self.output_row = combo_row(tr("Разрешение вывода"),
-                                    tr("Апскейлер дорисовывает кадр; Steam Deck — 720p"),
+        screen = Adw.PreferencesGroup(title="Display")
+        self.output_row = combo_row("Output resolution",
+                                    "The upscaler fills the frame; Steam Deck: 720p",
                                     OUTPUT_RES, self.ini.get("output_res", "1920x1080"))
         screen.add(self.output_row)
-        self.live_row = combo_row(tr("Смена разрешения на лету"),
-                                  tr("Без перезапуска, но медленнее на Steam Deck и старых GPU"),
+        self.live_row = combo_row("Live resolution changes",
+                                  "No restart needed, but slower on the Steam Deck and older GPUs",
                                   LIVE_RESOLUTION, self.ini.get("live_resolution", "0"))
         screen.add(self.live_row)
-        self.fullscreen_row = Adw.SwitchRow(title=tr("Полноэкранный режим"),
+        self.fullscreen_row = Adw.SwitchRow(title="Fullscreen",
                                             active=self.settings["fullscreen"])
         screen.add(self.fullscreen_row)
         # Issue #69: the window (and fullscreen) went to the monitor SDL calls primary.
-        self.display_row = Adw.ComboRow(title=tr("Монитор"))
-        self.display_row.add_suffix(flat_button("view-refresh-symbolic", tr("Обновить список"),
+        self.display_row = Adw.ComboRow(title="Monitor")
+        self.display_row.add_suffix(flat_button("view-refresh-symbolic", "Refresh the list",
                                                 lambda _button: self.fill_displays()))
         self.fill_displays()
         screen.add(self.display_row)
-        self.present_row = combo_row(tr("Режим показа кадров"), None, PRESENT_MODES,
+        self.present_row = combo_row("Present mode", None, PRESENT_MODES,
                                      self.settings["present_mode"])
         screen.add(self.present_row)
-        self.hdr_row = Adw.SwitchRow(title=tr("Разрешить HDR"), active=self.settings["hdr"])
+        self.hdr_row = Adw.SwitchRow(title="Allow HDR", active=self.settings["hdr"])
         screen.add(self.hdr_row)
         page.add(screen)
 
         # Issue #15: the first gamepad SDL found was taken (wheels and other controllers too).
-        controls = Adw.PreferencesGroup(title=tr("Управление"))
-        self.gamepad_row = Adw.ComboRow(title=tr("Контроллер"))
+        controls = Adw.PreferencesGroup(title="Controls")
+        self.gamepad_row = Adw.ComboRow(title="Controller")
         # Controller names are long: the selected one is shown in full under the title.
         self.gamepad_row.connect("notify::selected", lambda *_: self.show_gamepad())
-        self.gamepad_row.add_suffix(flat_button("view-refresh-symbolic", tr("Обновить список"),
+        self.gamepad_row.add_suffix(flat_button("view-refresh-symbolic", "Refresh the list",
                                                 lambda _button: self.fill_gamepads()))
         self.fill_gamepads()
         controls.add(self.gamepad_row)
         # Bindings: "Assign" waits for a key or button (bb-gpu-capabilities --read-input).
         self.control_rows = {}
-        for kind, title, icon in (("key", tr("Клавиатура и мышь"), "input-keyboard-symbolic"),
-                                  ("pad", tr("Геймпад"), "input-gaming-symbolic")):
+        for kind, title, icon in (("key", "Keyboard and mouse", "input-keyboard-symbolic"),
+                                  ("pad", "Gamepad", "input-gaming-symbolic")):
             expander = Adw.ExpanderRow(title=title,
-                                       subtitle=tr("Назначение кнопок; применяется при запуске игры"))
+                                       subtitle="Button assignments; applied when the game starts")
             for name, label, key_default, pad_default in CONTROLS:
                 default = key_default if kind == "key" else pad_default
                 if default is None:
                     continue
-                row = Adw.ActionRow(title=tr(label))
-                row.add_suffix(flat_button(icon, tr("Назначить"),
+                row = Adw.ActionRow(title=label)
+                row.add_suffix(flat_button(icon, "Assign",
                                            lambda _b, k=kind, n=name: self.assign_control(k, n)))
-                row.add_suffix(flat_button("edit-undo-symbolic", tr("Сбросить"),
+                row.add_suffix(flat_button("edit-undo-symbolic", "Reset",
                                            lambda _b, k=kind, n=name: self.set_control(k, n, None)))
                 expander.add_row(row)
                 self.control_rows[(kind, name)] = (row, default)
@@ -662,16 +644,16 @@ class LauncherWindow(Adw.ApplicationWindow):
             controls.add(expander)
         # Mouse look (runtime_pad.c): a click in the game takes the mouse, F1 lets it go.
         self.mouse_look_row = Adw.SwitchRow(
-            title=tr("Камера мышью"),
-            subtitle=tr("Щелчок в окне игры захватывает мышь, F1 — отпускает"),
+            title="Mouse look",
+            subtitle="A click in the game window takes the mouse, F1 releases it",
             active=self.ini.get("mouse_look", "1") == "1")
         controls.add(self.mouse_look_row)
         self.mouse_sensitivity_row = Adw.SpinRow.new_with_range(0.1, 10.0, 0.05)
-        self.mouse_sensitivity_row.set_title(tr("Чувствительность мыши"))
+        self.mouse_sensitivity_row.set_title("Mouse sensitivity")
         self.mouse_sensitivity_row.set_digits(2)
         self.mouse_sensitivity_row.set_value(float(self.ini.get("mouse_sensitivity", "1.0")))
         controls.add(self.mouse_sensitivity_row)
-        self.mouse_invert_row = Adw.SwitchRow(title=tr("Инвертировать мышь по вертикали"),
+        self.mouse_invert_row = Adw.SwitchRow(title="Invert mouse Y axis",
                                               active=self.ini.get("mouse_invert_y") == "1")
         controls.add(self.mouse_invert_row)
         def mouse_rows_sensitive(*_):
@@ -682,13 +664,13 @@ class LauncherWindow(Adw.ApplicationWindow):
         page.add(controls)
 
         upscaler = Adw.PreferencesGroup(
-            title=tr("Апскейлер"),
-            description=tr("Хранится в bbport.ini; в игре меняется через меню (Insert или L3+R3)"))
-        self.upscaler_row = combo_row(tr("Апскейлер"), None, UPSCALERS, self.ini["upscaler"])
+            title="Upscaler",
+            description="Stored in bbport.ini; in game, change it in the menu (Insert or L3+R3)")
+        self.upscaler_row = combo_row("Upscaler", None, UPSCALERS, self.ini["upscaler"])
         self.upscaler_row.connect("notify::selected", lambda *_: self.update_upscaler_status())
         upscaler.add(self.upscaler_row)
         # FSR 4.1.1 is built from the user's own AMD DLL (nothing of AMD's is shipped).
-        self.fsr411_row = Adw.ActionRow(title=tr("FSR 4.1.1 из своей DLL AMD"))
+        self.fsr411_row = Adw.ActionRow(title="FSR 4.1.1 from your own AMD DLL")
         self.fsr411_button = Gtk.Button(valign=Gtk.Align.CENTER)
         self.fsr411_button.connect("clicked", self.on_fsr411_button)
         self.fsr411_row.add_suffix(self.fsr411_button)
@@ -696,137 +678,120 @@ class LauncherWindow(Adw.ApplicationWindow):
         upscaler.add(self.fsr411_row)
         self.update_fsr411_row()
         # DLSS: NVIDIA's library, chosen like the FSR 4.1.1 DLL (the package may bring one).
-        self.dlss_row = Adw.ActionRow(title=tr("DLSS: библиотека NVIDIA"))
-        self.dlss_row.add_suffix(flat_button("document-open-symbolic", tr("Выбрать файл…"),
+        self.dlss_row = Adw.ActionRow(title="DLSS: NVIDIA's library")
+        self.dlss_row.add_suffix(flat_button("document-open-symbolic", "Choose a file…",
                                              lambda _b: self.choose_ngx()))
-        self.dlss_reset_button = flat_button("edit-undo-symbolic", tr("Убрать выбранную"),
+        self.dlss_reset_button = flat_button("edit-undo-symbolic", "Remove the chosen one",
                                              lambda _b: self.reset_ngx())
         self.dlss_row.add_suffix(self.dlss_reset_button)
         upscaler.add(self.dlss_row)
         self.update_dlss_row()
-        self.preset_row = combo_row(tr("Пресет"), None, PRESETS, int(self.ini.get("preset", "4")))
+        self.preset_row = combo_row("Preset", None, PRESETS, int(self.ini.get("preset", "4")))
         self.preset_row.connect("notify::selected", lambda *_: self.update_upscaler_status())
         self.output_row.connect("notify::selected", lambda *_: self.update_upscaler_status())
         upscaler.add(self.preset_row)
-        self.sharpen_row = Adw.SwitchRow(title=tr("Резкость (RCAS)"),
+        self.sharpen_row = Adw.SwitchRow(title="Sharpening (RCAS)",
                                          active=self.ini.get("sharpen") == "1")
         upscaler.add(self.sharpen_row)
         self.sharpness_row = Adw.SpinRow.new_with_range(0.0, 2.0, 0.05)
-        self.sharpness_row.set_title(tr("Сила резкости"))
+        self.sharpness_row.set_title("Sharpness")
         self.sharpness_row.set_digits(2)
         self.sharpness_row.set_value(float(self.ini.get("sharpness", "0.5")))
         upscaler.add(self.sharpness_row)
         self.motion_row = Adw.SwitchRow(
-            title=tr("Векторы движения объектов"),
-            subtitle=tr("Меньше гостинга на персонажах; стоит около 10% FPS"),
+            title="Object motion vectors",
+            subtitle="Less ghosting on characters; costs about 10% FPS",
             active=self.ini.get("object_motion") == "1")
         upscaler.add(self.motion_row)
-        self.show_fps_row = Adw.SwitchRow(title=tr("Показывать FPS"),
+        self.show_fps_row = Adw.SwitchRow(title="Show FPS",
                                           active=self.ini.get("show_fps") == "1")
         upscaler.add(self.show_fps_row)
         page.add(upscaler)
 
-        effects = Adw.PreferencesGroup(title=tr("Эффекты игры"),
-                                       description=tr("Патчи игры, применяются при запуске"))
-        self.lod_row = combo_row(tr("Детализация моделей"), None, MODEL_LOD,
+        effects = Adw.PreferencesGroup(title="Game effects",
+                                       description="Game patches, applied at start")
+        self.lod_row = combo_row("Model detail", None, MODEL_LOD,
                                  self.ini.get("model_lod", "0"))
         effects.add(self.lod_row)
         self.effect_rows = {}
         for key, title, default in EFFECTS:
-            row = Adw.SwitchRow(title=tr(title),
+            row = Adw.SwitchRow(title=title,
                                 active=self.ini.get(key, "1" if default else "0") == "1")
             if key == "debug_menu":
-                row.set_subtitle(tr("Нужна папка adhoc из мода Nexus #253 (шрифты adhoc/font) — в "
-                                    "dvdroot_ps4 игры или модом; без неё патч не применяется"))
+                row.set_subtitle(("Needs the adhoc folder from Nexus mod #253 (fonts in adhoc/font), in the game's "
+                                  "dvdroot_ps4 or as a mod; without it the patch is not applied"))
             self.effect_rows[key] = row
             effects.add(row)
         # The title's "play online / play offline": the port has no PSN.
         self.skip_network_row = Adw.SwitchRow(
-            title=tr("Пропускать выбор «по сети / вне сети»"),
-            subtitle=tr("Игра сразу открывает главное меню в режиме вне сети (патч игры)"),
+            title="Skip the “play online / offline” choice",
+            subtitle="The game opens the main menu offline at once (a game patch)",
             active=self.settings.get("skip_network_choice", True))
         effects.add(self.skip_network_row)
         page.add(effects)
 
-        frames = Adw.PreferencesGroup(title=tr("Частота кадров"))
-        self.fps_row = combo_row(tr("Режим"), tr("Какой патч частоты кадров применить к игре"),
+        frames = Adw.PreferencesGroup(title="Frame rate")
+        self.fps_row = combo_row("Mode", "Which frame rate patch to apply to the game",
                                  FPS_MODES, self.settings["fps_mode"])
         frames.add(self.fps_row)
         self.limit_row = Adw.SpinRow.new_with_range(0, 480, 1)
-        self.limit_row.set_title(tr("Ограничение FPS"))
-        self.limit_row.set_subtitle(tr("0 — без ограничения; укажите число, чтобы ограничить FPS"))
+        self.limit_row.set_title("FPS limit")
+        self.limit_row.set_subtitle("0: no limit; set a number to cap the frame rate")
         self.limit_row.set_value(self.settings["fps_limit"])
         frames.add(self.limit_row)
         page.add(frames)
 
-        perf = Adw.PreferencesGroup(title=tr("Производительность"))
+        perf = Adw.PreferencesGroup(title="Performance")
         self.pipe_row = combo_row(
-            tr("Двухстадийный конвейер GPU"),
-            tr("Быстрее на 20–30%; при нестабильности выключите"), DRAW_PIPE,
+            "Two-stage GPU pipeline",
+            "20–30% faster; turn off if unstable", DRAW_PIPE,
             self.settings["draw_pipe"])
         perf.add(self.pipe_row)
-        self.readbacks_row = combo_row(tr("Чтение данных GPU процессором"), None, READBACKS,
+        self.readbacks_row = combo_row("GPU data readbacks by the CPU", None, READBACKS,
                                        self.settings["readbacks"])
         perf.add(self.readbacks_row)
         self.preupload_row = combo_row(
-            tr("Фоновая загрузка в видеопамять"),
-            tr("Меньше рывков при подгрузке зон"), PREUPLOAD,
+            "Background pre-upload into VRAM",
+            "Fewer hitches when areas stream in", PREUPLOAD,
             self.settings.get("preupload", ""))
         perf.add(self.preupload_row)
         page.add(perf)
 
-        dev = Adw.PreferencesGroup(title=tr("Для разработчика"))
+        dev = Adw.PreferencesGroup(title="Developer")
         self.mangohud_row = Adw.SwitchRow(title="MangoHud", active=self.settings["mangohud"])
         dev.add(self.mangohud_row)
         self.save_log_row = Adw.SwitchRow(
-            title=tr("Сохранять журнал и статистику в файл"),
-            subtitle=tr("В папку logs в каталоге данных: для разбора рывков и вылетов"),
+            title="Save the log and statistics to a file",
+            subtitle="Into the logs folder of the data directory: to look into stutters and crashes",
             active=self.settings.get("save_log", False))
         dev.add(self.save_log_row)
         self.crash_diag_row = Adw.SwitchRow(
-            title=tr("Диагностика вылетов"),
-            subtitle=tr("Проверяет кучу игры и записывает записи в её память; немного медленнее"),
+            title="Crash diagnostics",
+            subtitle="Checks the game's heap and logs writes into its memory; a little slower",
             active=self.settings.get("crash_diag", False))
         dev.add(self.crash_diag_row)
         self.as_0_3_row = Adw.SwitchRow(
-            title=tr("Синхронизация как в 0.3"),
-            subtitle=tr("Для поиска регрессий: старая модель памяти и ожидания копий как в релизе 0.3"),
+            title="Synchronisation as in 0.3",
+            subtitle="For finding regressions: the old memory model and copy waits as released in 0.3",
             active=self.settings.get("as_0_3", False))
         dev.add(self.as_0_3_row)
-        self.stats_row = Adw.SwitchRow(title=tr("Статистика кадров в журнале"),
+        self.stats_row = Adw.SwitchRow(title="Frame statistics in the log",
                                        subtitle="BB_FRAME_STATS",
                                        active=self.settings["frame_stats"])
         dev.add(self.stats_row)
-        self.profile_row = Adw.SwitchRow(title=tr("Профиль GPU в журнале"),
+        self.profile_row = Adw.SwitchRow(title="GPU profile in the log",
                                          subtitle="BB_GPU_PROFILE",
                                          active=self.settings["gpu_profile"])
         dev.add(self.profile_row)
-        self.validation_row = Adw.SwitchRow(title=tr("Слои валидации Vulkan"),
-                                            subtitle=tr("Сильно замедляет"),
+        self.validation_row = Adw.SwitchRow(title="Vulkan validation layers",
+                                            subtitle="Much slower",
                                             active=self.settings["vk_validation"])
         dev.add(self.validation_row)
-        self.extra_row = Adw.EntryRow(title=tr("Доп. переменные (ИМЯ=значение через пробел)"),
+        self.extra_row = Adw.EntryRow(title="Extra variables (NAME=value, space-separated)",
                                       text=self.settings["extra_env"])
         dev.add(self.extra_row)
         page.add(dev)
         return page
-
-    def on_ui_language(self, row, _param):
-        choice = combo_value(row)
-        if choice == self.settings.get("ui_language", ""):
-            return
-        self.store()
-        self.settings["ui_language"] = choice
-        save_settings(self.settings)
-        if self.process:
-            # The log keeps streaming into the current page; rebuild on the next start.
-            set_language(choice)
-            self.toasts.add_toast(Adw.Toast(
-                title=tr("Применится после перезапуска лаунчера, пока игра запущена")))
-            return
-        set_language(choice)
-        # After this handler returns: the row that emitted the signal is replaced.
-        GLib.idle_add(lambda: self.build() and False)
 
     def game_dir(self):
         return Path(self.settings["game_dir"]).expanduser()
@@ -838,12 +803,12 @@ class LauncherWindow(Adw.ApplicationWindow):
     def update_user_status(self):
         path = self.user_dir()
         custom = bool(self.settings["user_dir"])
-        self.user_row.set_subtitle(str(path) if custom else tr("По умолчанию: {}").format(path))
+        self.user_row.set_subtitle(str(path) if custom else "Default: {}".format(path))
         saves = path / "savedata"
         found = saves.is_dir() and any(saves.iterdir())
         self.user_status.set_from_icon_name("object-select-symbolic" if found else "document-new-symbolic")
-        self.user_status.set_tooltip_text(tr("Найдены сохранения") if found
-                                          else tr("Сохранений пока нет: игра создаст их здесь"))
+        self.user_status.set_tooltip_text("Saves found" if found
+                                          else "No saves yet: the game will create them here")
         self.user_reset.set_sensitive(custom)
 
     def choose_folder(self, title, current, done):
@@ -865,7 +830,7 @@ class LauncherWindow(Adw.ApplicationWindow):
             self.settings["user_dir"] = path
             self.update_user_status()
             self.store()
-        self.choose_folder(tr("Папка сохранений"), self.user_dir(), chosen)
+        self.choose_folder("Saves folder", self.user_dir(), chosen)
 
     def on_reset_user(self, _button):
         self.settings["user_dir"] = ""
@@ -876,23 +841,24 @@ class LauncherWindow(Adw.ApplicationWindow):
         value = combo_value(self.upscaler_row)
         if value == "fsr4":
             ok = (PORT_DIR / "fsr4_shaders").is_dir()
-            hint = tr("Ассеты найдены") if ok else tr("Нет ассетов: tools/fetch_fsr4_assets.sh")
+            hint = "Assets found" if ok else "No assets: tools/fetch_fsr4_assets.sh"
         elif value == "fsr411":
             directory = fsr411_dir()
             problem = fsr411_problem(directory, combo_value(self.output_row),
                                      int(combo_value(self.preset_row)))
-            hint = tr("Ассеты для выбранного режима найдены") if not problem else (
-                tr("{}. Соберите FSR 4.1.1 из своей DLL кнопкой «Выбрать DLL…» ниже").format(problem))
+            hint = "Assets for the selected mode found" if not problem else (
+                "{}. Build FSR 4.1.1 from your own DLL with the “Choose DLL…” button below".format(problem))
         elif value == "dlss":
             # The game looks for the bridge and NVIDIA's library next to bb-probe (vk_dlss.cpp); the
             # AppImage has neither (NVIDIA's DLSS SDK is not bundled): DLSS then falls back to FSR 3.1.
             binaries = PORT_DIR / ("bin" if PACKAGED else "out")
             found = (binaries / "libbbport_dlss.so").is_file() and bool(
                 ngx_libraries(self.user_dir() / "dlss") or ngx_libraries(binaries))
-            hint = tr("DLSS найден (нужна видеокарта NVIDIA RTX)") if found else tr(
-                "DLSS не найден: выберите библиотеку NVIDIA ниже (и нужна сборка с мостом DLSS). Игра включит FSR 3.1")
+            hint = "DLSS found (needs an NVIDIA RTX GPU)" if found else (
+                "DLSS not found: choose NVIDIA's library below (a build with the DLSS bridge is needed too). "
+                "The game will use FSR 3.1")
         else:
-            hint = tr("Сглаживание в разрешении вывода без модели FSR") if value == "taa" else None
+            hint = "Anti-aliasing at the output resolution, no FSR model" if value == "taa" else None
         self.preset_row.set_sensitive(value not in ("taa", "off"))
         self.sharpen_row.set_sensitive(value != "off")
         self.sharpness_row.set_sensitive(value != "off")
@@ -914,24 +880,31 @@ class LauncherWindow(Adw.ApplicationWindow):
     def update_game_status(self):
         path = self.game_dir()
         ok = bool(self.settings["game_dir"]) and (path / "eboot.bin").is_file()
-        self.game_row.set_subtitle(str(path) if self.settings["game_dir"] else tr("не выбрана"))
+        self.game_row.set_subtitle(str(path) if self.settings["game_dir"] else "not chosen")
         # Other versions of the game start and then crash in its code (issues #7, #13, #14).
         problem = self.game_problem(path) if ok else None
         if not ok:
-            tooltip = tr("Нет eboot.bin в папке")
+            tooltip = "No eboot.bin in the folder"
         elif problem:
             kind, title, version = problem
             tooltip = {
-                "missing_update": tr("Нужно обновление 1.09: скопируйте файлы дампа обновления 1.09 в папку игры с заменой (найдена версия {})").format(version),
-                "wrong_eboot": tr("eboot.bin не от версии 1.09: скопируйте eboot.bin из дампа обновления 1.09 в папку игры с заменой"),
-                "patched_eboot": tr("eboot.bin с вшитым патчем 60 FPS от Lance McDonald: из-за него игра падает в меню жестов. Скопируйте чистый eboot.bin из дампа обновления 1.09 в папку игры с заменой"),
-                "other_title": tr("Это не магазинное издание Bloodborne (найдено {}): нужен Bloodborne любого региона с обновлением 1.09").format(title),
-                "unreadable": tr("eboot.bin не читается как расшифрованный исполняемый файл PS4: сделайте дамп заново"),
-                "damaged_files": tr("Файлы игры повреждены при распаковке: шейдеры не распаковываются, игра зависнет на загрузке. Распакуйте игру и обновление 1.09 заново исправленным инструментом (issue #81)"),
+                "missing_update": ("The 1.09 update is needed: copy the dumped 1.09 update into the game folder, "
+                                   "replacing files (found version {})").format(version),
+                "wrong_eboot": ("eboot.bin is not from 1.09: copy eboot.bin from the dumped 1.09 update into the "
+                                "game folder, replacing it"),
+                "patched_eboot": ("This eboot.bin has Lance McDonald's 60 fps patch baked in, which crashes the "
+                                  "game in the gestures menu: copy a clean eboot.bin from the dumped 1.09 update "
+                                  "into the game folder, replacing it"),
+                "other_title": ("Not a retail release of Bloodborne (found {}): Bloodborne from any region with "
+                                "update 1.09 is needed").format(title),
+                "unreadable": "eboot.bin cannot be read as a decrypted PS4 executable: dump the game again",
+                "damaged_files": ("The game files were damaged when extracted: the shaders do not unpack and the "
+                                  "game would hang while loading. Extract the game and the 1.09 update again with "
+                                  "a fixed tool (issue #81)"),
             }[kind]
             self.game_row.set_subtitle(f"{path}\n{tooltip}")
         else:
-            tooltip = tr("Bloodborne CUSA03173, версия 1.09")
+            tooltip = "Bloodborne CUSA03173, version 1.09"
         self.game_status.set_from_icon_name("object-select-symbolic" if ok and not problem else "dialog-warning-symbolic")
         self.game_status.set_tooltip_text(tooltip)
         self.launch_button.set_sensitive(ok or self.process is not None)
@@ -941,15 +914,15 @@ class LauncherWindow(Adw.ApplicationWindow):
             self.settings["game_dir"] = path
             self.update_game_status()
             self.store()
-        self.choose_folder(tr("Папка игры (с eboot.bin)"), self.game_dir(), chosen)
+        self.choose_folder("Game folder (with eboot.bin)", self.game_dir(), chosen)
 
     def show_control(self, kind, name):
         row, default = self.control_rows[(kind, name)]
         value = self.ini.get(f"{kind}.{name}")
         if value is None:
-            row.set_subtitle(tr("{} (по умолчанию)").format(default) if default else tr("не назначено"))
+            row.set_subtitle("{} (default)".format(default) if default else "not assigned")
         else:
-            row.set_subtitle(value or tr("не назначено"))
+            row.set_subtitle(value or "not assigned")
 
     def set_control(self, kind, name, value):
         """value: the binding, or None for the default."""
@@ -963,10 +936,10 @@ class LauncherWindow(Adw.ApplicationWindow):
             process = Gio.Subprocess.new([str(tool), "--read-input", kind],
                                          Gio.SubprocessFlags.STDOUT_PIPE)
         except GLib.Error as error:
-            self.toasts.add_toast(Adw.Toast(title=tr("Не удалось запустить: {}").format(error.message)))
+            self.toasts.add_toast(Adw.Toast(title="Could not start: {}".format(error.message)))
             return
         row, _default = self.control_rows[(kind, name)]
-        row.set_subtitle(tr("Нажмите клавишу или кнопку… (Esc — отмена)"))
+        row.set_subtitle("Press a key or a button… (Esc cancels)")
 
         def done(proc, result):
             try:
@@ -984,11 +957,11 @@ class LauncherWindow(Adw.ApplicationWindow):
         """The controller choices: the first connected one, the connected ones, and the saved
         choice while it is not connected."""
         current = self.settings.get("gamepad", "")
-        choices = [(tr("Авто"), "", tr("Первый подключённый"))]
+        choices = [("Auto", "", "First connected")]
         choices += [(name, guid, name) for guid, name in connected_gamepads()]
         if current and current not in [guid for _, guid, _ in choices]:
             name = self.settings.get("gamepad_name") or current
-            choices.append((tr("{} (не подключён)").format(name), current, name))
+            choices.append(("{} (not connected)".format(name), current, name))
         self.gamepad_row.set_model(Gtk.StringList.new([label for label, _, _ in choices]))
         self.gamepad_row.values = [guid for _, guid, _ in choices]
         self.gamepad_row.names = [name for _, _, name in choices]
@@ -999,9 +972,9 @@ class LauncherWindow(Adw.ApplicationWindow):
         """The monitor choices: the primary one, the connected ones, and the saved choice while it
         is not connected."""
         current = self.settings.get("display", "")
-        choices = [(tr("Основной"), "")] + [(label, value) for value, label in connected_displays()]
+        choices = [("Primary", "")] + [(label, value) for value, label in connected_displays()]
         if current and current not in [value for _, value in choices]:
-            choices.append((tr("{} (не подключён)").format(current), current))
+            choices.append(("{} (not connected)".format(current), current))
         self.display_row.set_model(Gtk.StringList.new([label for label, _ in choices]))
         self.display_row.values = [value for _, value in choices]
         self.display_row.set_selected(self.display_row.values.index(current) if current in self.display_row.values else 0)
@@ -1010,7 +983,7 @@ class LauncherWindow(Adw.ApplicationWindow):
         names = getattr(self.gamepad_row, "names", None)
         selected = names[self.gamepad_row.get_selected()] if names else ""
         self.gamepad_row.set_subtitle("\n".join(
-            line for line in (selected, tr("Выбранный берётся, как только подключится")) if line))
+            line for line in (selected, "The chosen one is used as soon as it connects") if line))
 
     def store(self):
         s = self.settings
@@ -1091,13 +1064,13 @@ class LauncherWindow(Adw.ApplicationWindow):
         order = list(dict.fromkeys(n for n in [*profile.get("order", []), *available] if n in available))
         for name in order:
             row = Adw.SwitchRow(title=name, active=name not in profile.get("disabled", []))
-            row.add_suffix(flat_button("go-up-symbolic", tr("Загрузить раньше"),
+            row.add_suffix(flat_button("go-up-symbolic", "Load earlier",
                                         lambda _b, n=name: self.move_mod(n, -1)))
-            row.add_suffix(flat_button("go-down-symbolic", tr("Загрузить позже"),
+            row.add_suffix(flat_button("go-down-symbolic", "Load later",
                                         lambda _b, n=name: self.move_mod(n, 1)))
             self.mod_list.add(name, row)
         if not order:
-            self.mods_folder_row.set_subtitle(f"{self.mods_dir()} — {tr('Модов нет')}")
+            self.mods_folder_row.set_subtitle(f"{self.mods_dir()} — {'No mods'}")
 
     def move_mod(self, name, direction):
         rows = self.mod_list.rows
@@ -1119,7 +1092,7 @@ class LauncherWindow(Adw.ApplicationWindow):
             self.settings["mods_dir"] = path
             self.refresh_mods()
             self.store()
-        self.choose_folder(tr("Папка модов"), self.mods_dir(), chosen)
+        self.choose_folder("Mods folder", self.mods_dir(), chosen)
 
     # --- third-party patches -------------------------------------------------------------
 
@@ -1154,7 +1127,7 @@ class LauncherWindow(Adw.ApplicationWindow):
             active = key in profile.get("enabled", []) or (default and key not in profile.get("disabled", []))
             subtitle = key.split("/", 1)[0]
             if meta.get("Author"):
-                subtitle += " · " + tr("Автор: {}").format(meta.get("Author"))
+                subtitle += " · " + "Author: {}".format(meta.get("Author"))
             row = Adw.SwitchRow(title=GLib.markup_escape_text(meta.get("Name") or key),
                                 subtitle=GLib.markup_escape_text(subtitle), active=active)
             if meta.get("Note"):
@@ -1162,7 +1135,7 @@ class LauncherWindow(Adw.ApplicationWindow):
             row.default = default
             self.patch_list.add(key, row)
         self.patches_folder_row.set_subtitle(
-            str(directory) if found else f"{directory} — {tr('Патчей нет')}")
+            str(directory) if found else f"{directory} — {'No patches'}")
 
     def on_refresh_patches(self, _button):
         self.save_patch_profile()
@@ -1175,7 +1148,7 @@ class LauncherWindow(Adw.ApplicationWindow):
             self.settings["patches_dir"] = path
             self.refresh_patches()
             self.store()
-        self.choose_folder(tr("Папка патчей"), patches_dir(self.settings), chosen)
+        self.choose_folder("Patches folder", patches_dir(self.settings), chosen)
 
     # --- log page ------------------------------------------------------------------------
 
@@ -1184,56 +1157,56 @@ class LauncherWindow(Adw.ApplicationWindow):
     def build_online_page(self):
         s = self.settings
         page = Adw.PreferencesPage()
-        play = Adw.PreferencesGroup(description=tr(
-            "Сообщения, пятна крови и призраки приходят с The Hunter's Dream; колокола и призывы "
-            "идут через сервер shadNet. Игра по сети совместима с версией для Windows: нужны версия "
-            "игры 1.09 и тот же сервер"))
-        self.online_row = Adw.SwitchRow(title=tr("Играть онлайн"),
-                                        subtitle=tr("Выключено: игра остаётся офлайн, как раньше"),
+        play = Adw.PreferencesGroup(description=("Messages, bloodstains and ghosts come from The Hunter's Dream; "
+                                                 "bells and summons go through a shadNet server. Online play works "
+                                                 "together with the Windows version: everyone needs game version "
+                                                 "1.09 and the same server"))
+        self.online_row = Adw.SwitchRow(title="Play online",
+                                        subtitle="Off: the game stays offline, as before",
                                         active=s["online"])
         play.add(self.online_row)
         if not online_module():
             self.online_row.set_sensitive(False)
-            self.online_row.set_subtitle(tr("Эта сборка без модуля онлайна (libbbnet.so): игра только офлайн"))
+            self.online_row.set_subtitle("This build has no online module (libbbnet.so): offline play only")
         page.add(play)
 
-        game = Adw.PreferencesGroup(title=tr("Игровой сервер (сообщения, пятна крови, призраки)"))
-        self.community_row = Adw.EntryRow(title=tr("Игровой сервер"), text=s["online_community"])
+        game = Adw.PreferencesGroup(title="Game server (messages, bloodstains, ghosts)")
+        self.community_row = Adw.EntryRow(title="Game server", text=s["online_community"])
         game.add(self.community_row)
         page.add(game)
 
         coop = Adw.PreferencesGroup(
-            title=tr("Сервер кооператива (колокола и призывы)"),
-            description=tr("srv.shadps4.net:31313 — публичный сервер shadPS4. Для частного сервера "
-                           "укажите host:port от его владельца. WebAPI: оставьте пустым, тогда "
-                           "берётся адрес сервера с портом 31315"))
-        self.server_row = Adw.EntryRow(title=tr("Адрес сервера"), text=s["online_server"])
-        self.webapi_row = Adw.EntryRow(title=tr("Адрес WebAPI"), text=s["online_webapi"])
+            title="Co-op server (bells and summons)",
+            description=("srv.shadps4.net:31313 is shadPS4's public server. For a private server, enter host:port "
+                         "from the person who runs it. WebAPI: leave it empty to use the server address with port "
+                         "31315"))
+        self.server_row = Adw.EntryRow(title="Server address", text=s["online_server"])
+        self.webapi_row = Adw.EntryRow(title="WebAPI address", text=s["online_webapi"])
         coop.add(self.server_row)
         coop.add(self.webapi_row)
         page.add(coop)
 
         account = Adw.PreferencesGroup(
-            title=tr("Учётная запись"),
-            description=tr("Имя учётной записи shadNet, не email. Зарегистрируйтесь на "
-                           "shadnet.shadps4.net или спросите владельца частного сервера. Пароль "
-                           "хранится на этом компьютере вместе с настройками лаунчера"))
-        self.npid_row = Adw.EntryRow(title=tr("Online ID (NPID)"), text=s["online_npid"])
-        self.password_row = Adw.PasswordEntryRow(title=tr("Пароль"), text=s["online_password"])
+            title="Account",
+            description=("Your shadNet account name, not your email. Register at shadnet.shadps4.net or ask the "
+                         "owner of a private server. The password is saved on this computer with the launcher "
+                         "settings"))
+        self.npid_row = Adw.EntryRow(title="Online ID (NPID)", text=s["online_npid"])
+        self.password_row = Adw.PasswordEntryRow(title="Password", text=s["online_password"])
         account.add(self.npid_row)
         account.add(self.password_row)
         page.add(account)
 
         connection = Adw.PreferencesGroup(
-            title=tr("Соединение"),
-            description=tr("У всех в сессии должны быть одна версия игры (1.09) и один сервер. "
-                           "Читы меняют игру и для других игроков: выключайте их при совместной игре"))
-        self.upnp_row = Adw.SwitchRow(title=tr("UPnP (открыть порт на роутере автоматически)"),
-                                      subtitle=tr("Выключите при Tailscale или другом VPN"),
+            title="Connection",
+            description=("Everyone in a session needs the same game version (1.09) and the same server. Cheats "
+                         "change the game for the other players too: turn them off when you play together"))
+        self.upnp_row = Adw.SwitchRow(title="UPnP (open a port on the router automatically)",
+                                      subtitle="Turn it off with Tailscale or another VPN",
                                       active=s["online_upnp"])
         connection.add(self.upnp_row)
-        test = Adw.ActionRow(title=tr("Проверить соединение"))
-        self.test_button = Gtk.Button(label=tr("Проверить"), valign=Gtk.Align.CENTER)
+        test = Adw.ActionRow(title="Test the connection")
+        self.test_button = Gtk.Button(label="Test", valign=Gtk.Align.CENTER)
         self.test_button.connect("clicked", self.on_test_connection)
         test.add_suffix(self.test_button)
         connection.add(test)
@@ -1250,24 +1223,24 @@ class LauncherWindow(Adw.ApplicationWindow):
 
     def on_test_connection(self, _button):
         server, webapi, community = self.online_addresses()
-        names = {"game": tr("Игровой сервер"), "shadnet": tr("Сервер shadNet"), "webapi": "WebAPI"}
+        names = {"game": "Game server", "shadnet": "shadNet server", "webapi": "WebAPI"}
         for row in self.test_rows:
             self.connection_group.remove(row)
         self.test_rows = []
         self.test_button.set_sensitive(False)
-        self.test_button.set_label(tr("Проверка…"))
+        self.test_button.set_label("Checking…")
 
         def show(results):
             for name, address, ok, detail in results:
                 # Plain text: an error such as "<urlopen error ...>" is not Pango markup.
                 row = Adw.ActionRow(title=GLib.markup_escape_text(f"{names[name]}: {address}"),
                                     subtitle=GLib.markup_escape_text(
-                                        tr("доступен") if ok else f'{tr("недоступен")} ({detail})'))
+                                        "reachable" if ok else f"{'not reachable'} ({detail})"))
                 row.add_prefix(Gtk.Image(icon_name="object-select-symbolic" if ok else "dialog-warning-symbolic"))
                 self.connection_group.add(row)
                 self.test_rows.append(row)
             self.test_button.set_sensitive(True)
-            self.test_button.set_label(tr("Проверить"))
+            self.test_button.set_label("Test")
             return False
 
         def work():
@@ -1286,10 +1259,10 @@ class LauncherWindow(Adw.ApplicationWindow):
         self.log_scroller = scroller
         box.append(scroller)
         bar = Gtk.ActionBar()
-        self.export_log_button = Gtk.Button(label=tr("Экспорт журнала…"))
+        self.export_log_button = Gtk.Button(label="Export log…")
         self.export_log_button.connect("clicked", self.on_export_log)
         bar.pack_end(self.export_log_button)
-        self.copy_log_button = Gtk.Button(label=tr("Копировать"))
+        self.copy_log_button = Gtk.Button(label="Copy")
         self.copy_log_button.connect("clicked", self.on_copy_log)
         bar.pack_end(self.copy_log_button)
         box.append(bar)
@@ -1309,11 +1282,11 @@ class LauncherWindow(Adw.ApplicationWindow):
 
     def on_copy_log(self, _button):
         self.get_clipboard().set(self.log_text())
-        self.toasts.add_toast(Adw.Toast(title=tr("Журнал скопирован")))
+        self.toasts.add_toast(Adw.Toast(title="Log copied"))
 
     def on_export_log(self, _button):
         text = self.log_text()
-        dialog = Gtk.FileDialog(title=tr("Экспорт журнала"))
+        dialog = Gtk.FileDialog(title="Export log")
         dialog.set_initial_name(f"bbport-{time.strftime('%Y%m%d_%H%M%S')}.log")
 
         def finish(dialog, result):
@@ -1327,9 +1300,9 @@ class LauncherWindow(Adw.ApplicationWindow):
                 Path(chosen.get_path()).write_text(text, encoding="utf-8")
             except OSError as error:
                 self.toasts.add_toast(Adw.Toast(
-                    title=tr("Не удалось сохранить журнал: {}").format(error.strerror or error)))
+                    title="Could not save the log: {}".format(error.strerror or error)))
                 return
-            self.toasts.add_toast(Adw.Toast(title=tr("Журнал сохранён: {}").format(chosen.get_path())))
+            self.toasts.add_toast(Adw.Toast(title="Log saved: {}".format(chosen.get_path())))
         dialog.save(self, None, finish)
 
     def append_log(self, text):
@@ -1349,11 +1322,11 @@ class LauncherWindow(Adw.ApplicationWindow):
             return
         npid = self.npid_row.get_text().strip()
         if online_module() and not self.online_row.get_active() and npid and hasattr(Adw, "AlertDialog"):
-            dialog = Adw.AlertDialog(heading="Bloodborne", body=tr(
-                "Учётная запись для игры онлайн указана, но «Играть онлайн» выключено"))
-            dialog.add_response("cancel", tr("Отмена"))
-            dialog.add_response("offline", tr("Играть офлайн"))
-            dialog.add_response("online", tr("Играть онлайн"))
+            dialog = Adw.AlertDialog(heading="Bloodborne", body=("An online account is filled in, but “Play "
+                                                                 "online” is off"))
+            dialog.add_response("cancel", "Cancel")
+            dialog.add_response("offline", "Play offline")
+            dialog.add_response("online", "Play online")
             dialog.set_response_appearance("online", Adw.ResponseAppearance.SUGGESTED)
 
             def on_response(_dialog, response):
@@ -1367,8 +1340,8 @@ class LauncherWindow(Adw.ApplicationWindow):
 
     def start_game(self):
         if self.online_row.get_active() and "@" in self.npid_row.get_text():
-            self.alert("Bloodborne", tr("Online ID — это имя учётной записи (NPID), "
-                                        "зарегистрированное на сервере, а не адрес email"))
+            self.alert("Bloodborne", ("The Online ID is the account name (NPID) you registered on the server, not "
+                                      "your email address"))
             self.stack.set_visible_child_name("online")
             return
         self.store()
@@ -1381,7 +1354,7 @@ class LauncherWindow(Adw.ApplicationWindow):
             # setsid: the game and its helpers form one process group, stopped together.
             self.process = launcher.spawnv(["setsid", "bash", str(PORT_DIR / "run.sh")])
         except GLib.Error as error:
-            self.toasts.add_toast(Adw.Toast(title=tr("Не удалось запустить: {}").format(error.message)))
+            self.toasts.add_toast(Adw.Toast(title="Could not start: {}".format(error.message)))
             return
         self.stream = Gio.DataInputStream.new(self.process.get_stdout_pipe())
         self.read_line()
@@ -1429,7 +1402,7 @@ class LauncherWindow(Adw.ApplicationWindow):
         self.process = None
         self.update_launch_button()
         self.update_game_status()
-        self.append_log(tr("\n— игра завершилась (код {}) —\n").format(status))
+        self.append_log("\n— the game exited (code {}) —\n".format(status))
 
     def on_close(self, _window):
         self.store()
@@ -1443,14 +1416,14 @@ class LauncherWindow(Adw.ApplicationWindow):
 
     def update_fsr411_row(self, progress=None):
         building = self.fsr411_build is not None
-        self.fsr411_button.set_label(tr("Отменить") if building else tr("Выбрать DLL…"))
+        self.fsr411_button.set_label("Cancel" if building else "Choose DLL…")
         if progress:
             self.fsr411_row.set_subtitle(progress)
         elif not building:
-            self.fsr411_row.set_subtitle(tr(
-                "Собрать FSR 4.1.1 из amd_fidelityfx_upscaler_dx12.dll 4.1.x (OptiScaler: папка "
-                "FSR4_LATEST, или из игры с FSR 4.1). Нужен GE-Proton 10+, Proton Experimental или "
-                "Proton-CachyOS; 2–5 минут (RDNA4: вдвое дольше, ещё и вариант FP8)"))
+            self.fsr411_row.set_subtitle(("Build FSR 4.1.1 from amd_fidelityfx_upscaler_dx12.dll 4.1.x "
+                                          "(OptiScaler: the FSR4_LATEST folder, or from a game with FSR 4.1). "
+                                          "Needs GE-Proton 10+, Proton Experimental or Proton-CachyOS; 2–5 minutes "
+                                          "(RDNA4: twice as long, with the FP8 variant)"))
 
     def alert(self, heading, body):
         if hasattr(Adw, "AlertDialog"):
@@ -1465,20 +1438,20 @@ class LauncherWindow(Adw.ApplicationWindow):
         bundled = ngx_libraries(binaries_dir())
         bridge = (binaries_dir() / "libbbport_dlss.so").is_file()
         if own:
-            text = tr("Своя: {}").format(own[-1].name[len(NGX_PREFIX):])
+            text = "Your own: {}".format(own[-1].name[len(NGX_PREFIX):])
         elif bundled:
-            text = tr("Из сборки: {}").format(bundled[-1].name[len(NGX_PREFIX):])
+            text = "From this build: {}".format(bundled[-1].name[len(NGX_PREFIX):])
         else:
-            text = tr("Нет: выберите libnvidia-ngx-dlss.so.* из DLSS SDK NVIDIA ({})").format(DLSS_SDK_URL)
+            text = "None: choose libnvidia-ngx-dlss.so.* from NVIDIA's DLSS SDK ({})".format(DLSS_SDK_URL)
         if not bridge:
-            text += "\n" + tr("Эта сборка без моста DLSS (libbbport_dlss.so): DLSS работать не будет")
+            text += "\n" + "This build has no DLSS bridge (libbbport_dlss.so): DLSS will not work"
         self.dlss_row.set_subtitle(text)
         self.dlss_reset_button.set_sensitive(bool(own))
         if hasattr(self, "sharpness_row"):  # built after this row
             self.update_upscaler_status()
 
     def choose_ngx(self):
-        dialog = Gtk.FileDialog(title=tr("Библиотека DLSS NVIDIA (libnvidia-ngx-dlss.so.*)"))
+        dialog = Gtk.FileDialog(title="NVIDIA's DLSS library (libnvidia-ngx-dlss.so.*)")
         files = Gtk.FileFilter()
         files.set_name("libnvidia-ngx-dlss.so.*, nvngx_dlss.dll")
         for pattern in ("libnvidia-ngx-dlss.so*", "*.dll", "*.DLL"):
@@ -1499,19 +1472,21 @@ class LauncherWindow(Adw.ApplicationWindow):
 
     def install_ngx(self, path):
         if path.suffix.lower() == ".dll":
-            self.alert(tr("Нужна библиотека для Linux"), tr(
-                "{} — библиотека DLSS для Windows; на Linux NVIDIA её не загружает. Нужна "
-                "libnvidia-ngx-dlss.so.<версия> из DLSS SDK NVIDIA: {}").format(path.name, DLSS_SDK_URL))
+            self.alert("A Linux library is needed",
+                       "{} is the Windows DLSS library; NVIDIA's Linux driver does not load it. "
+                       "libnvidia-ngx-dlss.so.<version> from NVIDIA's DLSS SDK is needed: {}".format(
+                           path.name, DLSS_SDK_URL))
             return
         try:
             with open(path, "rb") as f:
                 elf = f.read(4) == b"\x7fELF"
         except OSError as error:
-            self.alert(tr("Не удалось прочитать файл"), str(error))
+            self.alert("Could not read the file", str(error))
             return
         if not path.name.startswith(NGX_PREFIX) or not elf:
-            self.alert(tr("Это не библиотека DLSS"), tr(
-                "Нужен файл libnvidia-ngx-dlss.so.<версия> из DLSS SDK NVIDIA: {}").format(DLSS_SDK_URL))
+            self.alert("This is not the DLSS library",
+                       "libnvidia-ngx-dlss.so.<version> from NVIDIA's DLSS SDK is needed: {}".format(
+                           DLSS_SDK_URL))
             return
         target = self.user_dir() / "dlss"
         try:
@@ -1520,9 +1495,9 @@ class LauncherWindow(Adw.ApplicationWindow):
                 old.unlink()
             shutil.copy2(path, target / path.name)
         except OSError as error:
-            self.alert(tr("Не удалось скопировать библиотеку"), str(error))
+            self.alert("Could not copy the library", str(error))
             return
-        self.toasts.add_toast(Adw.Toast(title=tr("DLSS {}: готово").format(path.name[len(NGX_PREFIX):])))
+        self.toasts.add_toast(Adw.Toast(title="DLSS {}: ready".format(path.name[len(NGX_PREFIX):])))
         self.update_dlss_row()
 
     def reset_ngx(self):
@@ -1560,7 +1535,7 @@ class LauncherWindow(Adw.ApplicationWindow):
         if self.fsr411_build:
             self.stop_fsr411_build()
             return
-        self.choose_dll(tr("DLL апскейлера AMD (amd_fidelityfx_upscaler_dx12.dll)"),
+        self.choose_dll("AMD upscaler DLL (amd_fidelityfx_upscaler_dx12.dll)",
                         self.on_fsr411_dll)
 
     def on_fsr411_dll(self, upscaler, loader=None):
@@ -1571,44 +1546,41 @@ class LauncherWindow(Adw.ApplicationWindow):
         version = details.get("version", "?")
         if status == dll_info.UNSUPPORTED:
             if kind == "fsr4_0":
-                body = tr(
-                    "{}: FSR {}. Это официальная FSR 4.0.x от AMD: она включается только на "
-                    "видеокартах RDNA4 (RX 9000), а под Proton на других видеокартах не "
-                    "запускается, поэтому записать её нельзя.\n\nНужна FSR 4.1.x: например, "
-                    "FSR4_LATEST из OptiScaler или DLL из игры с FSR 4.1.").format(
-                        Path(upscaler).name, version)
+                body = ("{}: FSR {}. This is AMD's official FSR 4.0.x: it is enabled on RDNA4 GPUs (RX 9000) "
+                        "only and does not start under Proton on other GPUs, so it cannot be recorded.\n\n"
+                        "FSR 4.1.x is needed: for example FSR4_LATEST from OptiScaler, or the DLL of a game "
+                        "with FSR 4.1.").format(Path(upscaler).name, version)
             elif kind == "not_fsr4":
-                body = tr("{}: в этой DLL нет FSR 4. Нужна amd_fidelityfx_upscaler_dx12.dll "
-                          "версии 4.1.x.").format(Path(upscaler).name)
+                body = ("{}: this DLL has no FSR 4 inside. amd_fidelityfx_upscaler_dx12.dll version 4.1.x is "
+                        "needed.").format(Path(upscaler).name)
             else:
-                models = ", ".join(details.get("models", [])) or tr("нет")
-                body = tr(
-                    "{}: версия {}, модели FSR 4: {}.\n\nbbport повторяет только официальную FSR 4.1.x "
-                    "от AMD (модель v07_fp8_no_scale): например, FSR4_LATEST из OptiScaler или "
-                    "amd_fidelityfx_upscaler_dx12.dll из игры с FSR 4.1. Сборки сообщества (4.0.2b и "
-                    "подобные) устроены иначе и пока не поддерживаются.").format(
-                        Path(upscaler).name, version, models)
-            self.alert(tr("Эта DLL не подходит"), body)
+                models = ", ".join(details.get("models", [])) or "none"
+                body = ("{}: version {}, FSR 4 models: {}.\n\n"
+                        "bbport replays AMD's official FSR 4.1.x only (model v07_fp8_no_scale): for example "
+                        "FSR4_LATEST from OptiScaler, or amd_fidelityfx_upscaler_dx12.dll from a game with "
+                        "FSR 4.1. Community builds (4.0.2b and the like) are laid out differently and are not "
+                        "supported yet.").format(Path(upscaler).name, version, models)
+            self.alert("This DLL does not fit", body)
             return
         if status == dll_info.NO_LOADER:
             if kind == "loader_is_upscaler":
-                self.alert(tr("Это не загрузчик"), tr(
-                    "{} — это DLL апскейлера. Загрузчик называется amd_fidelityfx_loader_dx12.dll "
-                    "(у OptiScaler — amd_fidelityfx_dx12.dll) и лежит в той же папке игры, что и "
-                    "DLL апскейлера.").format(Path(loader).name))
+                self.alert("This is not the loader",
+                           "{} is the upscaler DLL. The loader is called amd_fidelityfx_loader_dx12.dll "
+                           "(amd_fidelityfx_dx12.dll in OptiScaler) and lies in the same game folder as the "
+                           "upscaler DLL.".format(Path(loader).name))
                 return
             if loader:
-                self.alert(tr("Загрузчик не подходит"), tr(
-                    "{}: версия {}. Нужен загрузчик FidelityFX 2.x — из той же игры, что и DLL "
-                    "апскейлера.").format(Path(loader).name, details.get("loader_version", "?")))
+                self.alert("The loader does not fit",
+                           "{}: version {}. A FidelityFX loader 2.x is needed, from the same game as the "
+                           "upscaler DLL.".format(Path(loader).name,
+                                                  details.get("loader_version", "?")))
                 return
             # A DLL without the FidelityFX API exports (AMD's own export it: no loader needed), and no
             # loader next to it or one folder up: ask for it.
-            self.toasts.add_toast(Adw.Toast(title=tr(
-                "Рядом с DLL нет загрузчика: выберите amd_fidelityfx_loader_dx12.dll из папки игры"),
+            self.toasts.add_toast(Adw.Toast(title=("No loader next to the DLL: choose "
+                                                   "amd_fidelityfx_loader_dx12.dll from the game's folder"),
                 timeout=8))
-            self.choose_dll(tr("Загрузчик FidelityFX (amd_fidelityfx_loader_dx12.dll или "
-                               "amd_fidelityfx_dx12.dll)"),
+            self.choose_dll("FidelityFX loader (amd_fidelityfx_loader_dx12.dll or amd_fidelityfx_dx12.dll)",
                             lambda path: self.on_fsr411_dll(upscaler, path))
             return
         self.start_fsr411_build(upscaler, details.get("loader"))
@@ -1623,13 +1595,13 @@ class LauncherWindow(Adw.ApplicationWindow):
             # setsid: Proton and its helpers form one process group, cancelled together.
             self.fsr411_build = launcher.spawnv(["setsid", *command])
         except GLib.Error as error:
-            self.toasts.add_toast(Adw.Toast(title=tr("Не удалось запустить: {}").format(error.message)))
+            self.toasts.add_toast(Adw.Toast(title="Could not start: {}".format(error.message)))
             return
-        self.append_log(tr("\n— сборка FSR 4.1.1 из {} —\n").format(upscaler))
+        self.append_log("\n— building FSR 4.1.1 from {} —\n".format(upscaler))
         stream = Gio.DataInputStream.new(self.fsr411_build.get_stdout_pipe())
         stream.read_line_async(GLib.PRIORITY_DEFAULT, None, self.on_fsr411_line)
         self.fsr411_build.wait_async(None, self.on_fsr411_built)
-        self.update_fsr411_row(tr("Подготовка…"))
+        self.update_fsr411_row("Preparing…")
         self.update_launch_button()
 
     def on_fsr411_line(self, stream, result):
@@ -1643,9 +1615,9 @@ class LauncherWindow(Adw.ApplicationWindow):
         if self.fsr411_build:
             step = re.match(r"\[\s*(\d+)/(\d+)\]", line)
             if step:
-                self.update_fsr411_row(tr("Запись проходов DLL под Proton: {} из {}").format(*step.groups()))
+                self.update_fsr411_row("Recording the DLL's passes under Proton: {} of {}".format(*step.groups()))
             elif line.startswith("Translating"):
-                self.update_fsr411_row(tr("Перевод проходов в SPIR-V…"))
+                self.update_fsr411_row("Translating the passes to SPIR-V…")
         stream.read_line_async(GLib.PRIORITY_DEFAULT, None, self.on_fsr411_line)
 
     def stop_fsr411_build(self):
@@ -1667,19 +1639,19 @@ class LauncherWindow(Adw.ApplicationWindow):
         self.fsr411_build = None
         self.update_fsr411_row()
         self.update_launch_button()
-        self.append_log(tr("— сборка FSR 4.1.1 завершилась (код {}) —\n").format(status))
+        self.append_log("— FSR 4.1.1 build finished (code {}) —\n".format(status))
         if status == 0:
             for index, (_label, value) in enumerate(UPSCALERS):
                 if value == "fsr411":
                     self.upscaler_row.set_selected(index)
             self.update_upscaler_status()
             self.store()
-            self.toasts.add_toast(Adw.Toast(title=tr("FSR 4.1.1 собран и выбран")))
+            self.toasts.add_toast(Adw.Toast(title="FSR 4.1.1 built and selected"))
         elif cancelled:
-            self.toasts.add_toast(Adw.Toast(title=tr("Сборка FSR 4.1.1 отменена")))
+            self.toasts.add_toast(Adw.Toast(title="FSR 4.1.1 build cancelled"))
         else:
-            message = FSR411_BUILD_ERRORS.get(status, "Сборка не удалась (код {}): подробности в журнале")
-            self.alert(tr("FSR 4.1.1 не собран"), tr(message).format(status))
+            message = FSR411_BUILD_ERRORS.get(status, "The build failed (code {}): details in the log")
+            self.alert("FSR 4.1.1 was not built", message.format(status))
 
 
 class LauncherApp(Adw.Application):

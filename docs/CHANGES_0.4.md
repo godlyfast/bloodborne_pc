@@ -1,273 +1,282 @@
-# Изменения в 0.4 (после 0.3, с 2026-10-06)
+# Changes in 0.4 (after 0.3, as of 2026-10-06)
 
-Замеры — RX 7800 XT / RADV, Yahar'gul стоя, 1080p без лимита FPS; «4 ядра» — `CPUS=0-3,8-11`
-(4 ядра / 8 потоков, как у Steam Deck).
+Measurements — RX 7800 XT / RADV, Yahar'gul standing still, 1080p without an FPS cap; "4 cores" — `CPUS=0-3,8-11`
+(4 cores / 8 threads, like the Steam Deck).
 
-## Модель памяти ПК — снова по умолчанию, и для NVIDIA
+## PC memory model — default again, and for NVIDIA
 
-- `BB_GUEST_IN_PLACE=1` по умолчанию (`run.sh`). В лаунчере вместо «Новой модели памяти» —
-  переключатель *Старая модель памяти* (ключ `legacy_memory_model`): модель 0.2 как запасной вариант.
-- NVIDIA отображает dma-buf только со смещения 0. Раньше порт тогда возвращался к старой модели;
-  теперь у таких драйверов каждое выделение прямой памяти игры — отдельный кусок памяти Vulkan
-  (игра делает 14 выделений и каждое отображает один раз целиком, со смещения 0). Проверка при
-  запуске пишет «the driver's dma-buf maps at offset 0 only: one chunk per direct memory allocation».
-  `BB_GUEST_WHOLE_CHUNKS=1` включает этот режим и на других драйверах (проверка без NVIDIA):
-  на RX 7800 XT 188–190 FPS, картинка в порядке. **На NVIDIA не проверено.**
+- `BB_GUEST_IN_PLACE=1` by default (`run.sh`). In the launcher, instead of "New memory model" —
+  an *Old memory model* toggle (the `legacy_memory_model` key): the 0.2 model as a fallback.
+- NVIDIA maps dma-buf only at offset 0. Previously the port then fell back to the old model;
+  now, with such drivers, each game direct-memory allocation is a separate Vulkan memory chunk
+  (the game makes 14 allocations and maps each one once, in full, at offset 0). The startup
+  check logs "the driver's dma-buf maps at offset 0 only: one chunk per direct memory allocation".
+  `BB_GUEST_WHOLE_CHUNKS=1` enables this mode on other drivers too (testing without NVIDIA):
+  on an RX 7800 XT 188–190 FPS, picture is fine. **Not tested on NVIDIA.**
 
-## Уровень API: libGnm игры
+## API level: the game's libGnm
 
-Игра собрана со статической libGnm: пакеты PM4 пишет не драйвер, а сама игра, через функции
-`sce::Gnm::DrawCommandBuffer` / `DispatchCommandBuffer` / `ConstantCommandBuffer` в
-`0x1068000–0x10a0000` и `0x11fd000–0x11fe000`. Это и есть графический API игры — уровень, на
-котором работают слои вроде DXVK.
+The game is built with a static libGnm: PM4 packets are written not by the driver but by the game
+itself, through the `sce::Gnm::DrawCommandBuffer` / `DispatchCommandBuffer` / `ConstantCommandBuffer`
+functions in `0x1068000–0x10a0000` and `0x11fd000–0x11fe000`. That is the game's graphics API —
+the level at which layers like DXVK operate.
 
-- `tools/re/`: поиск пакетов PM4 в коде (`pm4_scan.py`), граф вызовов по границам функций из
-  `.eh_frame` (`callgraph.py`), сигнатуры функций по регистрам (`gnm_sigs.py`), таблица перехватов
-  (`gen_gnm_table.py` → `gpu/shim/bbport_gnm_table.inc`), имена функций (`gnm_names.txt`).
-- `gpu/shim/bbport_gnm_hooks.cpp`: перехват 513 функций libGnm в начале (jmp на заглушку рядом с
-  образом, перенесённый пролог), до запуска кода игры; каждая точка сверяется с eboot 1.09.
-  - `BB_GNM_CENSUS=1` — счёт вызовов (`BB_GNM_CENSUS_FILE` — полный список в файл).
-  - `BB_GNM_OBSERVE=1` — каждый метод командного буфера отмечает пакеты, которые записал;
-    при отправке проверяется, откуда пришёл каждый пакет. Итог: **100,0 % пакетов (99,9 % слов)
-    пишут известные вызовы API** — командный поток игры целиком описывается вызовами Gnm.
-  - `BB_GNM_TRACE=адрес[:число]` — аргументы, вызывающий код и записанные пакеты.
-- Найдено: игра вызывает 99 методов командных буферов; обратный вызов резервирования
-  `0x26af230` начинает новый кусок буфера (список кусков уходит в отправку отдельными DCB);
-  `writeDataInline` (`0x1073b80`) из GX обнуляет 192 байта по разу на проход; метки EOP
-  (`writeAtEndOfPipe`, значение 1) ставит распределитель памяти GPU, `waitOnAddress` ждёт их
-  же — это барьер в порядке очереди, а не ожидание CPU.
+- `tools/re/`: PM4 packet search in code (`pm4_scan.py`), call graph from function boundaries in
+  `.eh_frame` (`callgraph.py`), function signatures from registers (`gnm_sigs.py`), hook table
+  (`gen_gnm_table.py` → `gpu/shim/bbport_gnm_table.inc`), function names (`gnm_names.txt`).
+- `gpu/shim/bbport_gnm_hooks.cpp`: hooks 513 libGnm functions at their entry (a jmp to a stub next
+  to the image, relocated prologue), before the game code runs; each site is checked against
+  eboot 1.09.
+  - `BB_GNM_CENSUS=1` — call counting (`BB_GNM_CENSUS_FILE` — full list to a file).
+  - `BB_GNM_OBSERVE=1` — each command-buffer method marks the packets it wrote; on submission it is
+    checked where every packet came from. Result: **100.0% of packets (99.9% of words) are written
+    by known API calls** — the game's command stream is fully described by Gnm calls.
+  - `BB_GNM_TRACE=address[:count]` — arguments, calling code, and written packets.
+- Findings: the game calls 99 command-buffer methods; the `0x26af230` reservation callback starts a
+  new buffer chunk (the chunk list goes into the submission as separate DCBs); `writeDataInline`
+  (`0x1073b80`) from GX zeroes 192 bytes at a time per pass; EOP markers (`writeAtEndOfPipe`, value
+  1) are set by the GPU memory allocator, and `waitOnAddress` waits for those same markers — this
+  is an in-queue-order barrier, not a CPU wait.
 
-## Быстрее на слабых процессорах
+## Faster on weak CPUs
 
-- `WRITE_DATA` и DMA ждали все отложенные копии хоста (22 мкс на каждый `WRITE_DATA`,
-  ~35 за кадр, 12 % времени потока записи отрисовок на 4 ядрах). Теперь ждут только копии,
-  которые читают записываемый диапазон (`Scheduler::WaitHostCopiesFor`, таблица источников по
-  64 КиБ); командный процессор PS4 тоже не ждёт предыдущих отрисовок перед такой записью.
-  Ожидания: 37 → 2 за кадр. `BB_HOST_COPY_WAITS=all` — прежнее поведение.
-- Проверка одновременной записи в планировщик (`ProducerScope`) включается только с
-  `BB_PRODUCER_CHECK=1` (лаунчер: *Диагностика вылетов*).
-- 4 ядра: 158 → 167 FPS.
-- `BB_SECTIONS=1` показывает и задачи стадии B по функциям.
+- `WRITE_DATA` and DMA waited for all pending host copies (22 µs per `WRITE_DATA`, ~35 per frame,
+  12% of the draw-recording thread's time on 4 cores). Now they wait only for copies that read the
+  range being written (`Scheduler::WaitHostCopiesFor`, a 64 KiB source table); the PS4 command
+  processor also no longer waits for previous draws before such a write. Waits: 37 → 2 per frame.
+  `BB_HOST_COPY_WAITS=all` — the old behavior.
+- The check for concurrent writes into the scheduler (`ProducerScope`) is enabled only with
+  `BB_PRODUCER_CHECK=1` (launcher: *Crash diagnostics*).
+- 4 cores: 158 → 167 FPS.
+- `BB_SECTIONS=1` now also shows stage-B tasks broken down by function.
 
-## Исправления
+## Fixes
 
-- Свёрнутое окно (Win+D, «Показать рабочий стол») больше не завершает игру (issue #31):
-  поверхность 0×0 не попадает ни в размер кадра, ни в swapchain; кадры, пока окно свёрнуто,
-  не выводятся. Проверено только, что обычный вывод не изменился: в Hyprland окно не
-  сворачивается до 0×0.
+- A minimized window (Win+D, "Show desktop") no longer terminates the game (issue #31): a 0×0
+  surface reaches neither the frame size nor the swapchain; frames are not presented while the
+  window is minimized. Only verified that normal output is unchanged: in Hyprland the window does
+  not minimize to 0×0.
 
-## Сравнение с 0.3
+## Comparison with 0.3
 
-Лаунчер, раздел «Для разработчика»: *Синхронизация как в 0.3* (`BB_AS_0_3=1` в `run.sh`)
-возвращает то, что изменилось после релиза: старая модель памяти, `WRITE_DATA`/DMA ждут все
-копии хоста (`BB_HOST_COPY_WAITS=all`), проверка одновременной записи (`BB_PRODUCER_CHECK=1`).
-Yahar'gul стоя, 1080p: 123 FPS против ~186 с новой моделью памяти и трансляции. Из командной
-строки: `bash tools/play_ab.sh v03 BB_AS_0_3=1`.
+Launcher, "For developers" section: *0.3-style synchronization* (`BB_AS_0_3=1` in `run.sh`)
+restores what changed after that release: the old memory model, `WRITE_DATA`/DMA waiting for all
+host copies (`BB_HOST_COPY_WAITS=all`), the concurrent-write check (`BB_PRODUCER_CHECK=1`).
+Yahar'gul standing still, 1080p: 123 FPS versus ~186 with the new memory and translation model.
+From the command line: `bash tools/play_ab.sh v03 BB_AS_0_3=1`.
 
-## Глубина резкости (DoF) снова работает (issue #44)
+## Depth of field (DoF) works again (issue #44)
 
-С DoF и любым апскейлером (FSR 3/4/4.1.1, TAA) в дальнем размытии — небо, туман — появлялись
-тёмные прямоугольники с резкими краями, полосы и перевёрнутая копия сцены; в 0.2 этого не было.
-Причина — прицельные ожидания дампов констант из 0.3 (`DumpConstRam` ждёт поток записи отрисовок,
-только если пересекается с их чтениями): в список чтений попадали лишь константные буферы, а
-вершины и индексы поток записи тоже читает из памяти игры. Игра пишет мелкие данные отрисовок
-(в том числе полноэкранные квады DoF) через движок констант, и дамп для следующих отрисовок
-перезаписывал их раньше, чем их успевали прочитать. Окно открывалось, когда поток записи
-задерживался прямо перед проходами DoF — на проходах апскейлера. Теперь диапазоны вершин и
-индексов тоже в списке (неподготовленные отрисовки ждут целиком). Ожиданий стало ~850/с вместо
-~150/с, FPS в проверенных местах не изменился. `BB_CONSTRAM_PIPE=0` — полное ожидание на каждом
-дампе (A/B).
+With DoF and any upscaler (FSR 3/4/4.1.1, TAA), the far blur — sky, fog — showed dark rectangles
+with sharp edges, bands, and an upside-down copy of the scene; this did not happen in 0.2. The
+cause was the targeted constant-dump waits from 0.3 (`DumpConstRam` waits for the draw-recording
+thread only when it overlaps with its reads): only constant buffers made it into the read list,
+while the recording thread also reads vertices and indices from game memory. The game writes small
+draw data (including DoF fullscreen quads) through the constant engine, and the dump for subsequent
+draws overwrote it before it could be read. The window opened when the recording thread stalled
+right before the DoF passes — during the upscaler passes. Now vertex and index ranges are in the
+list too (unprepared draws wait in full). Waits went from ~150/s to ~850/s; FPS in the tested
+places did not change. `BB_CONSTRAM_PIPE=0` — full wait on every dump (A/B).
 
-Возможно, это же чинит мерцающие значки и глифы интерфейса (issue #11) — не проверено.
+This may also fix the flickering HUD icons and glyphs (issue #11) — not verified.
 
-## Кэш шейдеров больше не ломает запуск (issues #28, #38, #39)
+## Shader cache no longer breaks startup (issues #28, #38, #39)
 
-- Файлы кэша пишутся под временным именем и переименовываются: вылет или отключение питания
-  оставляют старый файл или никакого, а не обрезанный.
-- Обрезанная запись при чтении больше не останавливает игру (`Invalid or corrupted
-  deserialization container`, код 23): повреждённые записи считаются, кэш пересобирается.
-  То же для SPIR-V с неверным заголовком и для пайплайнов, которые драйвер отверг при
-  предзагрузке. Код SRT walker из кэша регистрируется только после проверки длины.
+- Cache files are written under a temporary name and then renamed: a crash or power loss leaves
+  the old file or none at all, not a truncated one.
+- A truncated record during a read no longer stops the game (`Invalid or corrupted
+  deserialization container`, code 23): corrupted records are counted, and the cache is rebuilt.
+  The same applies to SPIR-V with a bad header and to pipelines the driver rejected during
+  preloading. SRT walker code from the cache is registered only after a length check.
 
-## Прочее
+## Misc
 
-- Процессор без AVX, BMI1, MOVBE, LZCNT, POPCNT или SSE4.2 (Intel до Haswell) — понятное
-  сообщение при запуске вместо `Guest fault (signal 4)`, код 132 (issue #26).
-  `BB_SKIP_CPU_CHECK=1` — запустить всё равно.
-- `tools/fsr4cap/build_assets.sh` молча завершался, если в одной из папок Steam не было
-  GE-Proton (issue #40).
-- Копии памяти игры, поставленные в прямом режиме записи (отрисовка после проходов апскейлера,
-  `BB_VK_RECORD_THREAD=0`), выполняются сразу, а не со следующей отправкой.
-- Внутриигровое меню на английском или русском — переключатель «Language» в меню (PR #36);
-  по умолчанию язык лаунчера. Лаунчер на бразильском португальском (PR #10); строки без перевода
-  — на английском. README: адрес репозитория в команде клонирования (PR #43).
-- Переключатель `BB_TOGGLE_FILE`: бит 31 отключает сборщик текстур; второе число в файле —
-  временные биты экспериментов (`BbToggle::Experiment`).
+- A CPU without AVX, BMI1, MOVBE, LZCNT, POPCNT, or SSE4.2 (pre-Haswell Intel) — a clear startup
+  message instead of `Guest fault (signal 4)`, code 132 (issue #26). `BB_SKIP_CPU_CHECK=1` — run
+  anyway.
+- `tools/fsr4cap/build_assets.sh` exited silently when one of the Steam folders had no GE-Proton
+  (issue #40).
+- Game-memory copies queued in direct recording mode (draws after the upscaler passes,
+  `BB_VK_RECORD_THREAD=0`) are executed immediately rather than with the next submission.
+- The in-game menu in English or Russian — a "Language" toggle in the menu (PR #36); defaults to
+  the launcher's language. Launcher in Brazilian Portuguese (PR #10); untranslated strings are in
+  English. README: repository address in the clone command (PR #43).
+- `BB_TOGGLE_FILE` switch: bit 31 disables the texture gatherer; the second number in the file is
+  experiment toggle bits (`BbToggle::Experiment`).
 
-## Векторы движения (ночь на 2026-10-07, проверяется)
+## Motion vectors (night of 2026-10-07, under verification)
 
-- Знак оси Y векторов камеры берётся из вьюпорта G-buffer каждый кадр (`BB_CAMERA_Y=up/down` —
-  принудительно), а не задан константой: 0.2 и 0.3 ошибались каждая в своих местах
-  (issues #41, #42, #47, #18).
-- Если в кадре несколько проходов G-buffer, камера берётся у того, чья глубина идёт в векторы.
-- FSR 4 на пресетах с апскейлом получает кадр в линейном свете (`BB_FSR4_LINEAR=0` — как раньше).
-- Маска реактивности работает и с FSR 4: его результат смешивается с текущим кадром на
-  эффектах (туман, свет, частицы).
+- The Y-axis sign of the camera vectors is taken from the G-buffer viewport every frame
+  (`BB_CAMERA_Y=up/down` — force), rather than being hardcoded: 0.2 and 0.3 were each wrong in
+  their own places (issues #41, #42, #47, #18).
+- If a frame has several G-buffer passes, the camera is taken from the one whose depth feeds the
+  vectors.
+- On upscaling presets, FSR 4 receives the frame in linear light (`BB_FSR4_LINEAR=0` — as before).
+- The reactivity mask works with FSR 4 too: its output is blended with the current frame on
+  effects (fog, lights, particles).
 
-## Поток записи отрисовок не ждёт потоки записи команд (2026-10-07)
+## The draw-recording thread no longer waits for command-recording threads (2026-10-07)
 
-- Презентер (барьер кадра, FSR 1, постобработка) записывается так же, как отрисовки, на потоках
-  записи команд. Раньше он брал командный буфер напрямую: поток отрисовок ждал, пока потоки
-  записи закончат всё переданное (~90 мкс каждый кадр), и сам отправлял кадр (~45 мкс).
-- Где команды всё же пишутся напрямую (проходы апскейлера: векторы движения, TAA, FSR 3/4,
-  резкость), они идут в отдельный сегмент со своим пулом команд, после переданных сегментов,
-  без ожидания (`BB_DIRECT_SEGMENT=0` — ожидание, как раньше). Сигналы и упорядоченные задачи
-  в таком сегменте остаются в очереди, чтобы не обогнать более ранние метки.
-- Поток показа ждёт, пока отправка кадра (с потока записи) ушла в очередь, прежде чем ставить
-  своё ожидание на неё: иначе одна очередь ждала бы более позднюю отправку (зависание GPU при
-  запуске, найдено на этой работе).
-- DMA в память, которую GPU использует на месте (модель ПК) или которую писал GPU, — это копия
-  на GPU в порядке потока; поток отрисовок больше не ждёт перед ней копии и отложенные сигналы
-  (~16 мкс на каждую, ~900 в секунду: 4-байтовые счётчики GDS).
-- Исправлены два давних редких случая записи в уже отправленный командный буфер: смена размера
-  при резкости больше 1 (`Finish()` посреди прохода апскейлера) и смена пресета FSR 4 в меню.
-- `BB_FINAL_DUMP_TRIGGER` (`KIND=final tools/frame.sh`): снимок кадра после FSR и постобработки.
+- The presenter (frame barrier, FSR 1, post-processing) is recorded the same way as draws, on the
+  command-recording threads. Previously it took a command buffer directly: the draw thread waited
+  for the recording threads to finish everything submitted (~90 µs every frame) and submitted the
+  frame itself (~45 µs).
+- Where commands are still written directly (upscaler passes: motion vectors, TAA, FSR 3/4,
+  sharpening), they go into a separate segment with its own command pool, after the submitted
+  segments, without waiting (`BB_DIRECT_SEGMENT=0` — wait, as before). Signals and ordered tasks in
+  such a segment stay queued so they do not overtake earlier markers.
+- The present thread waits for the frame submission (from the recording thread) to reach the queue
+  before placing its own wait on it: otherwise one queue could wait on a later submission (GPU
+  hang at startup, found during this work).
+- DMA into memory the GPU uses in place (PC model) or that the GPU has written is a GPU-side copy
+  in stream order; the draw thread no longer waits for copies and deferred signals before it
+  (~16 µs each, ~900 per second: 4-byte GDS counters).
+- Fixed two long-standing rare cases of writing into an already-submitted command buffer: a size
+  change with sharpening above 1 (`Finish()` in the middle of an upscaler pass) and changing the
+  FSR 4 preset in the menu.
+- `BB_FINAL_DUMP_TRIGGER` (`KIND=final tools/frame.sh`): frame capture after FSR and
+  post-processing.
 
-Замеры (Hunter's Dream, стоя, 4 ядра / 8 потоков, модель ПК): 143–144 → 146 FPS; поток
-отрисовок больше не блокируется на записи команд (было 1,8–3,3 % времени). 16 потоков: модель ПК
-~186, старая модель 144–151 (разброс между запусками ±3 %, без разницы с прежней сборкой).
+Measurements (Hunter's Dream, standing still, 4 cores / 8 threads, PC model): 143–144 → 146 FPS;
+the draw thread is no longer blocked on command recording (was 1.8–3.3% of the time). 16 threads:
+PC model ~186, old model 144–151 (±3% spread between runs, no difference from the previous build).
 
-## Режим работы в лаунчере (2026-10-07)
+## Operating mode in the launcher (2026-10-07)
 
-- Группа *Режим работы*, переключатель *Новая модель памяти и трансляции* (`BB_PC_MODEL=1`),
-  по умолчанию выключен. Выключен — старая модель памяти, как в 0.3, со всеми исправлениями
-  после неё. Включён — память игры используется видеочипом на месте, работа командного
-  процессора переводится в команды Vulkan (экспериментально).
-- Только видеокарты AMD: лаунчер находит их по `/sys/class/drm/card*/device/vendor` (0x1002) и
-  без AMD делает переключатель недоступным; библиотека GPU сама держит режим выключенным, если
-  выбранное устройство Vulkan не AMD (гибридные ноутбуки). `BB_PC_MODEL_ANY_GPU=1` — включить
-  всё равно, для проверки.
-- Прежний переключатель *Как в версии 0.3* переехал в раздел «Для разработчика» под именем
-  *Синхронизация как в 0.3*: это откат для поиска регрессий, а не один из двух режимов.
-- README (оба) описывают оба режима, таблицу отличий от shadPS4 и планы.
+- An *Operating mode* group with the *New memory and translation model* toggle (`BB_PC_MODEL=1`),
+  off by default. Off — the old memory model, as in 0.3, with all fixes since. On — game memory is
+  used in place by the GPU, and command-processor work is translated into Vulkan commands
+  (experimental).
+- AMD GPUs only: the launcher finds them via `/sys/class/drm/card*/device/vendor` (0x1002) and
+  disables the toggle when there is no AMD; the GPU library itself keeps the mode off if the
+  selected Vulkan device is not AMD (hybrid laptops). `BB_PC_MODEL_ANY_GPU=1` — force it on, for
+  testing.
+- The former *As in version 0.3* toggle moved to the "For developers" section as *0.3-style
+  synchronization*: it is a rollback for regression hunting, not one of two modes.
+- Both READMEs describe both modes, the table of differences from shadPS4, and plans.
 
-## FSR 4.1.1 из своей DLL — кнопкой в лаунчере (2026-10-07)
+## FSR 4.1.1 from your own DLL — via a launcher button (2026-10-07)
 
-- *Апскейлер → FSR 4.1.1 из своей DLL AMD → Выбрать DLL…*: выбираешь
-  `amd_fidelityfx_upscaler_dx12.dll` 4.1.x, лаунчер собирает ассеты (`tools/fsr4cap/build_assets.sh`)
-  в фоне, ход — в подписи строки и во вкладке «Журнал», в конце FSR 4.1.1 выбирается. Отмена той
-  же кнопкой. Без окна: `--build-fsr411 <DLL> [загрузчик]`.
-- DLL проверяется до записи (`tools/fsr4cap/dll_info.py`: версия из свойств файла, модели FSR 4
-  по именам шейдеров). Сборки сообщества OptiScaler (4.0.2b/c: модель `v07_i8`, 16 проходов вместо
-  29, другие веса) пока не подходят — об этом сразу сообщение, без записи. Загрузчик ищется рядом
-  с DLL и папкой выше под обоими именами (`amd_fidelityfx_loader_dx12.dll`, у OptiScaler —
-  `amd_fidelityfx_dx12.dll`), иначе лаунчер его спрашивает.
-- Proton запускается через umu-run, если он установлен, иначе в контейнере Steam, который требует
-  этот Proton (`toolmanifest.vdf`: Steam Linux Runtime 4 для GE-Proton 11) — umu больше не нужен.
-- AppImage содержит собранные заранее dxil-spirv и fsr4cap.exe (Nix), SPIRV-Tools: компиляторы и
-  сеть не нужны, только GE-Proton. Рабочая папка (префикс Proton ~300 МБ) удаляется после сборки.
-- Заголовки FidelityFX API (MIT) лежат в `tools/fsr4cap/ffx`: SDK больше не клонируется.
-- Новый набор заменяет старый только целиком; коды выхода скрипта (2–7) лаунчер показывает
-  понятным текстом. Собранная ранее dxil-spirv, которая не запускается (дерево переехало),
-  собирается заново.
+- *Upscaler → FSR 4.1.1 from your own AMD DLL → Choose DLL…*: you pick
+  `amd_fidelityfx_upscaler_dx12.dll` 4.1.x, the launcher builds the assets
+  (`tools/fsr4cap/build_assets.sh`) in the background, progress is shown in the row's caption and
+  in the "Log" tab, and FSR 4.1.1 gets selected at the end. Cancel with the same button. Without
+  the window: `--build-fsr411 <DLL> [loader]`.
+- The DLL is checked before anything is written (`tools/fsr4cap/dll_info.py`: version from the file
+  properties, FSR 4 models by shader names). Community OptiScaler builds (4.0.2b/c: model `v07_i8`,
+  16 passes instead of 29, different weights) are not supported yet — a message says so right away,
+  with nothing written. The loader is searched for next to the DLL and one folder up under both
+  names (`amd_fidelityfx_loader_dx12.dll`, for OptiScaler — `amd_fidelityfx_dx12.dll`); otherwise
+  the launcher asks for it.
+- Proton is launched through umu-run if installed, otherwise inside the Steam container that this
+  Proton requires (`toolmanifest.vdf`: Steam Linux Runtime 4 for GE-Proton 11) — umu is no longer
+  needed.
+- The AppImage contains prebuilt dxil-spirv and fsr4cap.exe (Nix) and SPIRV-Tools: no compilers or
+  network needed, only GE-Proton. The working folder (Proton prefix ~300 MB) is deleted after the
+  build.
+- FidelityFX API headers (MIT) live in `tools/fsr4cap/ffx`: the SDK is no longer cloned.
+- A new set replaces the old one only as a whole; script exit codes (2–7) are shown by the launcher
+  as readable text. A previously built dxil-spirv that no longer runs (the tree moved) is rebuilt.
 
-Проверено: из исходников (Nix, umu) и пакет (Steam Linux Runtime 4 в FHS-окружении) — результат
-побайтно совпадает с прежним `fsr4_411`; кнопка в лаунчере (headless-сессия): ход «N из 20»,
-отказ для 4.0.2c. Не проверено: AppImage на обычном дистрибутиве / Steam Deck (на NixOS AppImage
-скрывает системный `/nix` и FHS-ссылки).
-- После первой проверки (DLL из Pragmata): это официальная FSR 4.0.3 с той же моделью
-  `v07_fp8_no_scale`, но её провайдер AMD показывает только на RDNA4 — на RX 7800 XT под любым
-  Proton DLL предлагает лишь FSR 3.1.5 и 2.3.4. Теперь 4.0.x отклоняется сразу с объяснением.
-  Отклоняется и «загрузчик», который на самом деле DLL апскейлера (так получилось в видео:
-  загрузчика рядом не было, и в окне выбора оказалась та же DLL).
-- Proton выбирается перебором: первый, под которым DLL включает FSR 4.1 (GE-Proton 10+,
-  Proton-CachyOS, Proton Experimental, затем Proton 11.0/10.0 из Steam), у каждого свой префикс.
-  Проверено на RX 7800 XT: GE-Proton 11-6, Proton-CachyOS 11 (июль), Experimental (октябрь) —
-  да; Proton 11.0-2c и GE-Proton 9 — нет. На Steam Deck был только GE-Proton 9.
-- На NixOS AppImage сразу говорит, что рантайм Steam там не запустить (код 8), вместо
-  непонятного «не запустился под Proton».
+Tested: from source (Nix, umu) and as a package (Steam Linux Runtime 4 in an FHS environment) —
+the result matches the previous `fsr4_411` byte-for-byte; the launcher button (headless session):
+progress "N of 20", rejection for 4.0.2c. Not tested: the AppImage on a regular distro / Steam Deck
+(on NixOS the AppImage hides the system `/nix` and the FHS links).
+- After the first check (a DLL from Pragmata): this is the official FSR 4.0.3 with the same
+  `v07_fp8_no_scale` model, but its AMD provider only exposes it on RDNA4 — on an RX 7800 XT, under
+  any Proton, the DLL offers only FSR 3.1.5 and 2.3.4. Now 4.0.x is rejected right away with an
+  explanation. A "loader" that is actually the upscaler DLL is rejected too (as happened in the
+  video: there was no loader nearby, and the same DLL ended up in the picker window).
+- Proton is chosen by trial: the first one under which the DLL enables FSR 4.1 (GE-Proton 10+,
+  Proton-CachyOS, Proton Experimental, then Proton 11.0/10.0 from Steam), each with its own prefix.
+  Tested on RX 7800 XT: GE-Proton 11-6, Proton-CachyOS 11 (July), Experimental (October) — yes;
+  Proton 11.0-2c and GE-Proton 9 — no. The Steam Deck only had GE-Proton 9.
+- On NixOS the AppImage says right away that the Steam runtime cannot run there (code 8), instead
+  of the cryptic "failed to launch under Proton".
 
-## FSR 4.1.1: одна DLL и вариант FP8 для RDNA4 (2026-10-07, день)
+## FSR 4.1.1: one DLL and an FP8 variant for RDNA4 (2026-10-07, daytime)
 
-- **Загрузчик больше не нужен.** DLL апскейлера AMD сама экспортирует FidelityFX API
-  (`ffxCreateContext` …), и `fsr4cap.exe` загружает её напрямую; `dll_info.py` проверяет экспорт
-  по таблице PE. Загрузчик спрашивается только у DLL без этих функций (таких пока не встречалось).
-  Запись с DLL напрямую совпадает с записью через загрузчик (кроме двух байт неинициализированной
-  константы в кадре 0), набор — побайтно.
-- Повторная сборка из AppImage падала: `cp: cannot create regular file …/fsr4cap.exe: Permission
-  denied` — копия файла из AppImage только для чтения, и вторая копия поверх неё не создаётся.
-  Теперь старый файл удаляется перед копированием (и DLL, если она только для чтения).
-- **FP8 на RDNA4.** На RDNA4 vkd3d-proton даёт DLL матрицы FP8, и она запускает другой вариант
-  проходов (issue #12): те же 29 проходов, константы и буферы, но шейдеры на WMMA FP8, свои веса и
-  своя сетка групп (у каждого прохода свой тайл: 16×8, 32×1, 16×4 …; `_post` — ширина тензора
-  выровнена до 32, а не до 4). Сборка после INT8 пробует FP8 на первом размере и, если DLL
-  отдаёт другие шейдеры (RDNA4), записывает все 20 размеров во второй раз (`fp8/capture_*`).
-  `extract.py` проверяет правила обоих вариантов и пишет `fsr4_411/fp8/` (матрицы FP8,
-  `VK_EXT_shader_float8`) и `fsr4_411/fp8emu/` (FP8 через FP16-матрицы, как vkd3d-proton на
-  RDNA3 — только для проверки). Игра выбирает FP8 сама, если у видеокарты есть матрицы FP8 и
-  набор собран; `BB_FSR411_VARIANT=int8|fp8|fp8emu` — принудительно. В строке
-  `Upscaler: FSR 4.1.1 replay, …` теперь указан вариант.
-- Проходы с матрицами запускаются с подгруппой 32 и полными подгруппами, как у vkd3d-proton
-  (эвристика размера волны у них совпадает с использованием матриц — `extract.py` это проверяет).
-  Устройство игры включает `VK_KHR_cooperative_matrix`, `VK_EXT_shader_float8`,
-  `vulkanMemoryModel`, `computeFullSubgroups`, если они есть.
-- Проверено на RX 7800 XT: FP8 с эмуляцией (GE-Proton 11-6, `BB_FSR4CAP_FP8=1`) — DLL и повтор
-  **побайтно одинаковы** на 7 размерах, обе модели, 4 кадра (`VARIANT=fp8emu verify.sh`; с
-  dxil-spirv той же версии, что в vkd3d-proton GE-Proton 11-6 — наша закреплённая новее и
-  иначе округляет преобразования FP8 в эмуляции). INT8 — как прежде (1600×900 расходится у
-  правого края из-за гонки в самой DLL). На RDNA4 вживую **не проверено**: проходы модели FP8
-  от обеих версий dxil-spirv одинаковы, различаются только `_post`.
-- На RDNA3 FP8 по умолчанию не записывается: эмуляция почти вдвое медленнее INT8 (1440p Balanced,
-  RX 7800 XT: 3,35 мс против 1,82 мс). `BB_FSR4CAP_FP8=1` —
-  записать и там, `BB_FSR4CAP_FP8=0` — не записывать нигде.
+- **The loader is no longer needed.** AMD's upscaler DLL itself exports the FidelityFX API
+  (`ffxCreateContext` …), and `fsr4cap.exe` loads it directly; `dll_info.py` checks the export via
+  the PE table. The loader is asked for only for DLLs without these functions (none encountered so
+  far). Recording with the DLL directly matches recording through the loader (except for two bytes
+  of an uninitialized constant in frame 0); the set matches byte-for-byte.
+- Rebuilding from the AppImage failed: `cp: cannot create regular file …/fsr4cap.exe: Permission
+  denied` — the file's copy from the AppImage is read-only, and a second copy over it cannot be
+  created. Now the old file is deleted before copying (and the DLL too, if it is read-only).
+- **FP8 on RDNA4.** On RDNA4, vkd3d-proton gives the DLL FP8 matrices, and it runs a different
+  variant of the passes (issue #12): the same 29 passes, constants, and buffers, but WMMA FP8
+  shaders, its own weights, and its own group grid (each pass has its own tile: 16×8, 32×1,
+  16×4 …; `_post` — tensor width aligned to 32 instead of 4). After INT8, the build tries FP8 at
+  the first size and, if the DLL returns different shaders (RDNA4), records all 20 sizes a second
+  time (`fp8/capture_*`). `extract.py` checks the rules of both variants and writes `fsr4_411/fp8/`
+  (FP8 matrices, `VK_EXT_shader_float8`) and `fsr4_411/fp8emu/` (FP8 via FP16 matrices, like
+  vkd3d-proton on RDNA3 — for verification only). The game picks FP8 itself if the GPU has FP8
+  matrices and the set is built; `BB_FSR411_VARIANT=int8|fp8|fp8emu` forces it. The
+  `Upscaler: FSR 4.1.1 replay, …` line now states the variant.
+- Matrix passes are launched with subgroup size 32 and full subgroups, as in vkd3d-proton (their
+  wave-size heuristic matches matrix usage — `extract.py` verifies this). The game device enables
+  `VK_KHR_cooperative_matrix`, `VK_EXT_shader_float8`, `vulkanMemoryModel`, `computeFullSubgroups`
+  when available.
+- Tested on RX 7800 XT: FP8 with emulation (GE-Proton 11-6, `BB_FSR4CAP_FP8=1`) — the DLL and the
+  replay are **byte-for-byte identical** across 7 sizes, both models, 4 frames (`VARIANT=fp8emu
+  verify.sh`; with dxil-spirv of the same version as in GE-Proton 11-6's vkd3d-proton — our pinned
+  one is newer and rounds FP8 conversions differently in emulation). INT8 — as before (1600×900
+  diverges at the right edge due to a race in the DLL itself). Live on RDNA4 **not tested**: the
+  FP8-model passes from both dxil-spirv versions are identical; only `_post` differs.
+- On RDNA3, FP8 is not recorded by default: emulation is almost twice as slow as INT8 (1440p
+  Balanced, RX 7800 XT: 3.35 ms versus 1.82 ms). `BB_FSR4CAP_FP8=1` — record there too;
+  `BB_FSR4CAP_FP8=0` — record nowhere.
 
-## Управление и игровое меню (2026-10-07)
+## Controls and the game menu (2026-10-07)
 
-- **Меню жестов с тачпада.** Касания тачпада приходили с id 0 и без времени удержания, и игра
-  их не принимала: ни тачпад, ни Back, ни Tab не открывали жесты. Теперь каждое новое касание
-  получает свой id (1–127), как у DualShock 4, и время удержания. Проверено в игре: левая половина
-  тачпада — «Жесты», правая — «Личные вещи» (с включённым debug menu левая половина открывает его).
-  В лаунчере это подписано у привязок тачпада.
-- **Клавиатура работает и при подключённом геймпаде.** Раньше она управляла игрой, только когда
-  геймпада нет (а на Steam Deck он есть всегда); работали лишь Tab и Backspace. Теперь кнопки
-  клавиатуры добавляются к кнопкам геймпада, а зажатая клавиша движения/камеры отклоняет стик до
-  конца. Вживую с клавиатурой не проверено (только сборка и тесты).
-- **Меню настроек (Insert / L3+R3) помнит своё место** — и между открытиями, и между запусками
-  (`menu_pos` в bbport.ini, доля экрана: переживает смену разрешения). Раньше оно каждый раз
-  открывалось у левого края.
-- **Курсор мыши над меню.** Пока меню открыто, показывается системный курсор (в полноэкранном
-  режиме и после 3 с без движения он скрыт), а меню сразу знает, где мышь, а не после первого
-  движения.
-- **Настройки из меню больше не стирают назначения кнопок.** Меню записывало bbport.ini
-  целиком, только со своими ключами: назначения клавиатуры и геймпада из лаунчера (`key.*`,
-  `pad.*`) и другие его ключи пропадали после любого изменения в игре. Теперь меню меняет только
-  свои строки, остальное оставляет, файл заменяется целиком (обрыв записи оставляет старый).
-  Тест: `ninja -C out/gpu settings-test`.
+- **Gesture menu from the touchpad.** Touchpad touches arrived with id 0 and no hold time, and the
+  game rejected them: neither the touchpad, nor Back, nor Tab opened gestures. Now each new touch
+  gets its own id (1–127), like on the DualShock 4, and a hold time. Tested in-game: left half of
+  the touchpad — "Gestures", right half — "Personal Effects" (with the debug menu enabled, the
+  left half opens it). The launcher notes this next to the touchpad bindings.
+- **The keyboard works even with a gamepad connected.** Previously it controlled the game only
+  when no gamepad was present (on Steam Deck there always is one); only Tab and Backspace worked.
+  Now keyboard buttons are added to the gamepad's buttons, and a held movement/camera key fully
+  deflects the stick. Not tested live with a keyboard (build and tests only).
+- **The settings menu (Insert / L3+R3) remembers its position** — both between openings and
+  between launches (`menu_pos` in bbport.ini, as a fraction of the screen: survives resolution
+  changes). Previously it opened at the left edge every time.
+- **Mouse cursor over the menu.** While the menu is open, the system cursor is shown (in fullscreen
+  and after 3 s without movement it is hidden), and the menu knows where the mouse is right away,
+  rather than after the first movement.
+- **Settings from the menu no longer wipe key bindings.** The menu rewrote bbport.ini wholesale,
+  with only its own keys: keyboard and gamepad bindings from the launcher (`key.*`, `pad.*`) and
+  its other keys disappeared after any in-game change. Now the menu changes only its own lines and
+  leaves the rest; the file is replaced as a whole (an interrupted write leaves the old one). Test:
+  `ninja -C out/gpu settings-test`.
 
-## BB_READBACKS=2 больше не зависает при запуске
+## BB_READBACKS=2 no longer hangs at startup
 
-Точный режим обратного чтения защищает страницы, записанные GPU, и от чтения. Их читали и
-потоки копирования порта (выгрузка в VRAM: `bb:Copy*`, `bb:VkRecorder`): чтение падало в
-обработчик сбоев, тот ставил обратное чтение в очередь потоку GPU и ждал, а поток GPU в это время
-ждал поток записи отрисовок, который ждал эти копии. Теперь копии порта в точном режиме читают
-память игры через второе отображение тех же страниц, которое защита не трогает. Проверено: с
-`BB_READBACKS=2` игра доходит до титульного экрана и работает (раньше вставала на загрузке).
-В самой игре в этом режиме не проверено. `BB_PROBE=<обёртка>` в run.sh — запуск под gdb и т. п.
-и из исходников.
+The exact readback mode protects GPU-written pages from reads as well. The port's copy threads read
+them too (VRAM upload: `bb:Copy*`, `bb:VkRecorder`): the read fell into the fault handler, which
+queued a readback to the GPU thread and waited, while the GPU thread was waiting for the
+draw-recording thread, which was waiting for those copies. Now, in exact mode, the port's copies
+read game memory through a second mapping of the same pages, which the protection does not touch.
+Tested: with `BB_READBACKS=2` the game reaches the title screen and runs (previously it froze
+during loading). Not tested in gameplay in this mode. `BB_PROBE=<wrapper>` in run.sh — run under
+gdb etc., also from source.
 
-## FSR 4.1.1 из AppImage на NixOS (2026-10-07, вечер)
+## FSR 4.1.1 from the AppImage on NixOS (2026-10-07, evening)
 
-AppImage работает в своём пространстве монтирования с chroot, где её `/nix/store` заменяет
-системный: изнутри не видны ни `umu-run`, ни `nix-shell`, ни FHS-окружение Steam, и кнопка
-сборки на NixOS заканчивалась ошибкой 8. Теперь `capture_all.sh` на NixOS без `umu-run`:
-- если есть `nix-shell` (из исходников, на самой системе) — перезапускается в
+The AppImage runs in its own mount namespace with a chroot, where its `/nix/store` replaces the
+system one: from inside, neither `umu-run`, nor `nix-shell`, nor the Steam FHS environment is
+visible, and the build button on NixOS ended with error 8. Now `capture_all.sh` on NixOS without
+`umu-run`:
+- if `nix-shell` is available (from source, on the system itself) — it re-executes itself in
   `nix-shell -p umu-launcher`;
-- в AppImage — копирует себя и `proton.sh` в рабочую папку (`~/.local/share/bbport/fsr4cap`,
-  её видят обе стороны) и запускает запись на системе через `systemd-run --user --wait --pipe`
-  в login-shell (PATH и NIX_PATH пользователя); ход и код выхода приходят обратно, отмена
-  останавливает службу. Перевод в SPIR-V — уже внутри AppImage. `systemd-run` из
-  systemd-minimal (он и так был в пакете) добавлен в PATH лаунчера.
+- in the AppImage — it copies itself and `proton.sh` into the working folder
+  (`~/.local/share/bbport/fsr4cap`, visible to both sides) and starts the capture on the system via
+  `systemd-run --user --wait --pipe` in a login shell (the user's PATH and NIX_PATH); progress and
+  the exit code come back, and canceling stops the service. SPIR-V translation then happens inside
+  the AppImage. `systemd-run` from systemd-minimal (already in the package) has been added to the
+  launcher's PATH.
 
-Проверено на этом ПК (NixOS): кнопка без окна (`--build-fsr411`) из AppImage собирает FSR 4.1.1
-до конца, набор побайтно как эталонный, рабочая папка удалена; отмена посреди записи
-останавливает службу на системе.
+Tested on this PC (NixOS): the windowless button (`--build-fsr411`) from the AppImage builds FSR
+4.1.1 to completion, the set is byte-for-byte identical to the reference, the working folder is
+deleted; canceling mid-capture stops the service on the system.
