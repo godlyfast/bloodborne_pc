@@ -2,7 +2,11 @@
 from paths import ROOT
 import importlib.util
 import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -77,6 +81,33 @@ class PackagedVulkanTests(unittest.TestCase):
         self.env["LD_LIBRARY_PATH"] = "/bundled/lib"
         self.configure()
         self.assertEqual(self.env, before)
+
+    @unittest.skipUnless(shutil.which("cc"), "C compiler needed for the CUDA loader regression")
+    def test_dlss_loads_the_matching_host_cuda_driver(self):
+        self.nvidia_host()
+        cuda = self.libs / "libcuda.so.580.1"
+        subprocess.run(["cc", "-shared", "-fPIC", "-x", "c", "-", "-o", str(cuda)],
+                       input="void cuda_driver_probe(void) {}\n", text=True, check=True,
+                       capture_output=True)
+        (self.libs / "libcuda.so.1").symlink_to(cuda.name)
+        self.configure()
+        # Exercise the dynamic loader used by NGX, not just the presence of a cache link.
+        consumer = (
+            "import ctypes, os\n"
+            "class Info(ctypes.Structure):\n"
+            "    _fields_ = [('name', ctypes.c_char_p), ('base', ctypes.c_void_p), "
+            "('symbol', ctypes.c_char_p), ('address', ctypes.c_void_p)]\n"
+            "driver = ctypes.CDLL('libcuda.so.1')\n"
+            "info = Info()\n"
+            "dladdr = ctypes.CDLL(None).dladdr\n"
+            "dladdr.argtypes = [ctypes.c_void_p, ctypes.POINTER(Info)]\n"
+            "assert dladdr(ctypes.cast(driver.cuda_driver_probe, ctypes.c_void_p), ctypes.byref(info))\n"
+            "print(os.path.realpath(os.fsdecode(info.name)))\n"
+        )
+        result = subprocess.run([sys.executable, "-c", consumer], env={**os.environ, **self.env},
+                                text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), str(cuda))
 
     def nvidia_host(self):
         driver = self.library("libGLX_nvidia.so.580.1")

@@ -89,10 +89,10 @@ def configure(env, manifest_dirs=MANIFEST_DIRS, library_dirs=LIBRARY_DIRS,
     cache = data_dir / "vulkan" / "nvidia" / key
     libraries = cache / "lib"
     libraries.mkdir(parents=True, exist_ok=True)
-    # NVIDIA dlopens versioned shader/compiler libraries at runtime, so expose
-    # the driver's siblings as well as its ICD. Never link generic host libs.
+    # NVIDIA dlopens shader/compiler libraries and CUDA for NGX/DLSS device extensions.
+    # Expose the driver's siblings, never generic host libraries.
     sources = [driver]
-    for pattern in ("libnvidia-*.so*", "libGLX_nvidia.so*", "libEGL_nvidia.so*"):
+    for pattern in ("libnvidia-*.so*", "libcuda.so*", "libGLX_nvidia.so*", "libEGL_nvidia.so*"):
         sources.extend(sorted(driver.parent.glob(pattern)))
     for source in sources:
         if not elf64(source):

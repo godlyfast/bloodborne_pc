@@ -53,18 +53,28 @@ Build/test with the existing `bash build.sh --test` and
 `python3 -m unittest discover -s tests` commands after installing the documented
 dependencies and submodules.
 
+**DLSS startup fix:** the packaged NVIDIA driver now exposes its matching
+`libcuda.so*` libraries alongside the existing vendor libraries. NGX needs CUDA
+when enabling its Vulkan device extensions; hiding it caused
+`ErrorInitializationFailed` despite a working RTX GPU and DLSS bridge. The fix
+does not expose host libc/GTK or require a CUDA toolkit. The regression executes
+the real dynamic loader against an isolated driver fixture.
+
 **Optional tested desktop profile — not global defaults:** Ryzen 9 5950X,
-RTX 4090, NVIDIA 615.71.09, 4K 60-Hz SDR display. FSR 4 v07 INT8 Quality
-(`upscaler=fsr4`, `preset=1`, `output_res=3840x2160`, `live_resolution=0`),
+RTX 4090, NVIDIA 615.71.09, 4K 60-Hz SDR display. DLSS Quality
+(`upscaler=dlss`, `preset=1`, `output_res=3840x2160`, `live_resolution=0`),
 highest geometry (`model_lod=-2`), chromatic aberration and motion blur off,
 other effects and object motion vectors on. RCAS remains 0.50. Native rendering
-is capped at 120 FPS; title-screen telemetry is not a combat benchmark.
-The deployed launch environment retains `MALLOC_ARENA_MAX=1`,
-`BB_VK_RECORD_THREAD=0` (avoids the deferred recorder's 128-KiB assertion path)
-and `BB_DLSS=0`. Enabling the bundled DLSS bridge failed Vulkan device creation
-on this stack; selecting DLSS with that override otherwise falls back to FSR 3.1.
-FSR 4 was verified actually rendering. These are machine-specific observations,
-not recommendations to change other GPUs' defaults or exceed 120 FPS.
+is capped at 120 FPS. DLSS Quality (2560×1440 → 3840×2160) and native 4K DLAA
+(`preset=0`) both initialized and rendered a loaded offline character scene;
+completed game-only frames were captured directly from the renderer.
+These short smoke runs are not combat, image-quality or long-session benchmarks.
+The stability environment retains `MALLOC_ARENA_MAX=1` and
+`BB_VK_RECORD_THREAD=0` (avoids the deferred recorder's 128-KiB assertion path).
+For DLSS, remove the old `BB_DLSS=0` override or explicitly set `BB_DLSS=1`;
+otherwise the renderer still falls back to FSR 3.1. FSR 4 also remains available.
+These are machine-specific observations, not recommendations to change other
+GPUs' defaults or exceed 120 FPS.
 
 ## Highlights
 
@@ -298,6 +308,9 @@ enough) and build with `DLSS_SDK_ROOT=/path/to/DLSS bash build.sh`. That also bu
 DLSS gets the inputs FSR 3.1 gets (scene color, depth, motion vectors, jitter). Without the
 libraries, on other GPUs or with `BB_DLSS=0` it is listed as unavailable, and a DLSS setting falls
 back to FSR 3.1.
+The host NVIDIA driver must include `libcuda.so.1` matching its graphics driver.
+The packaged entry point exposes it through the NVIDIA-only library cache;
+do not add the host's whole `/usr/lib` to the package's loader path.
 
 The AppImage built with `DLSS_SDK_ROOT` carries the bridge and NVIDIA's library (NVIDIA's RTX SDK
 license allows that in an application; its text is `NVIDIA-DLSS-LICENSE.txt` in the package). A
