@@ -18,6 +18,10 @@
   TRAPNO in a fixed stack record before optional GPU/reverse-engineering work.
   Synthetic UD2/store-fault and optional-diagnostic-failure fixtures accompany
   the port, alongside inherited-stream and log-restart regressions.
+- Parent-run Arch verification exposed missing boundaries in standalone fixtures:
+  GPU input callbacks in the pad test, `runtime_file_mount` in the content test,
+  and `runtime_extra_direct_map` in the renderer fixture. Existing inactive/abort
+  policies are retained; production sources and linking policy are unchanged.
 - These are source integration notes, not a build, gameplay, performance or
   stability result for 0.6. New upstream *Auto* memory-model and `libbbnet20.so`
   rollout contracts are documented in the fork README.
