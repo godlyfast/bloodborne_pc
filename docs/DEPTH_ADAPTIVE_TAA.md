@@ -22,7 +22,7 @@ These parameters do not account for pixel depth, which causes problems:
 
 ### 1. Depth-Adaptive Disocclusion Threshold
 
-**File:** `gpu/shadps4/video_core/host_shaders/taa.comp`
+**File:** `gpu/upscale/shaders/taa.comp`
 
 ```glsl
 float depthThreshold(float depth) {
@@ -75,7 +75,7 @@ result = mix(current, clipped, weight);
 
 ### 3. Motion Vector Validation (camera_motion.comp)
 
-**File:** `gpu/shadps4/video_core/host_shaders/camera_motion.comp`
+**File:** `gpu/upscale/shaders/camera_motion.comp`
 
 ```glsl
 // Depth-adaptive validation: distant surfaces need tighter depth matching.
@@ -93,7 +93,7 @@ if (object_motion.b > 0.99 && abs(object_motion.a - depth) < depth_threshold &&
 
 ### 4. Improved Debug Mode Visualization
 
-**File:** `gpu/shadps4/video_core/host_shaders/camera_motion.comp`
+**File:** `gpu/upscale/shaders/camera_motion.comp`
 
 The `BB_DEBUG_MOTION=1` modes are now structured:
 ```glsl
@@ -184,5 +184,5 @@ echo "0" > /tmp/bb_toggle
 
 - [upscaler.md](upscaler.md) — general upscaler architecture
 - [motion_vectors.md](motion_vectors.md) — motion vectors
-- TAA shader: `gpu/shadps4/video_core/host_shaders/taa.comp`
-- Camera motion: `gpu/shadps4/video_core/host_shaders/camera_motion.comp`
+- TAA shader: `gpu/upscale/shaders/taa.comp`
+- Camera motion: `gpu/upscale/shaders/camera_motion.comp`

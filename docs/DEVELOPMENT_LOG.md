@@ -1,5 +1,27 @@
 # Bloodborne: first native launch experiment
 
+## Upstream 0.6 integration and persistent diagnostics (2026-10-19)
+
+- The fork merges upstream `8185b88` without rewriting published history.
+  Upstream's pooled low-thread allocator and packaged CUDA exposure supersede
+  the earlier implementations; the fork still rejects unrepresentable
+  allocation fallbacks and retains its behavioral regressions.
+- The October 18 deployed diagnostics are ported to the new runtime interfaces.
+  Native GUI and supported `run.sh` launches share `crash_diag`/`save_log`;
+  explicit caller controls remain authoritative. Missing profiles are optional,
+  malformed settings fail clearly, and the save-protection wrapper is unchanged.
+- Same-second/PID restarts retain separate logs and automatic frame/readback
+  paths, while custom paths remain caller-owned. Source, selected wrapper,
+  actual native probe/GPU, generated image/content/patch and settings hashes
+  identify each saved run without copying images or reading saves.
+- Linux fatal handling writes signal/code/address/image, GPR/RIP/RFLAGS/ERR/
+  TRAPNO in a fixed stack record before optional GPU/reverse-engineering work.
+  Synthetic UD2/store-fault and optional-diagnostic-failure fixtures accompany
+  the port, alongside inherited-stream and log-restart regressions.
+- These are source integration notes, not a build, gameplay, performance or
+  stability result for 0.6. New upstream *Auto* memory-model and `libbbnet20.so`
+  rollout contracts are documented in the fork README.
+
 ## Frame rate, sound, diagnostics (2026-09-25)
 
 - **FPS**: `BB_FPS=uncap` (the default) applies the "Uncap FPS++" patch

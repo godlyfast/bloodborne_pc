@@ -1,5 +1,6 @@
 """Exercise run.sh across a re-exec with lightweight preparation/probe stand-ins."""
 from paths import ROOT
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,7 +14,7 @@ import unittest
 
 class RestartResolutionTests(unittest.TestCase):
     def run_restarts(self, explicit=False, live=False, ini_extra='', caps=None, bare_path=False,
-                     save_log=False):
+                     save_log=None, settings=None, overrides=None):
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory)
             # Preparation is unrelated to this test; allow the real patch compiler to
@@ -25,6 +26,7 @@ class RestartResolutionTests(unittest.TestCase):
             struct.pack_into('<HH', elf, 0x36, 56, 1)
             struct.pack_into('<IIQQQQQQ', elf, 64, 1, 0, 0, 0, 0, 0, 0x6000000, 0)
             (out / 'eboot.elf').write_bytes(elf)
+            (out / 'boot-linked.bin').write_bytes(b'fixture-boot-image')
             (data / 'eboot.bin').touch()
             config = data / 'bbport.ini'
             config.write_text('upscaler=fsr3\npreset=1\noutput_res=1280x720\n' + ini_extra)
@@ -35,7 +37,7 @@ class RestartResolutionTests(unittest.TestCase):
             python = data / 'python'
             python.write_text(f'#!{sys.executable}\n' +
                 'import subprocess, sys\n'
-                'if sys.argv[1] in ("scripts/patches.py", "scripts/mods.py"):\n'
+                'if sys.argv[1] in ("scripts/patches.py", "scripts/mods.py", "-c"):\n'
                 '    sys.exit(subprocess.call([sys.executable, *sys.argv[1:]]))\n')
             python.chmod(0o755)
             probe = data / 'probe'
@@ -45,7 +47,9 @@ class RestartResolutionTests(unittest.TestCase):
                 'config=Path(os.environ["BB_CONFIG"])\n'
                 'stage=int(os.environ.get("BB_TEST_STAGE", "0"))\n'
                 'row={key:os.environ.get(key) for key in '
-                '("BB_RENDER_RES", "BB_OUTPUT_RES", "BB_AUTO_RENDER_RES")}\n'
+                '("BB_RENDER_RES", "BB_OUTPUT_RES", "BB_AUTO_RENDER_RES", "BB_FREE_CHECK", '
+                '"BB_WRITE_LOG", "BB_PRODUCER_CHECK", "BB_SAVE_LOG", "BB_FRAME_LOG", "BB_READBACK_LOG")}\n'
+                'print(f"diagnostic-test-stage={stage}", flush=True)\n'
                 'if os.environ.get("BB_TEST_CALLER_STREAM")=="1":\n'
                 '    row["caller_stream"]=os.pread(3,4096,0).decode()\n'
                 'with (config.parent/"environments").open("a") as f:\n'
@@ -60,6 +64,17 @@ class RestartResolutionTests(unittest.TestCase):
                        BB_DATA_DIR=str(data), BB_CONFIG=str(config), BB_GAME_DIR=str(data),
                        BB_SAVE_LOG='1' if save_log else '0',
                        BB_TEST_CALLER_STREAM='1' if save_log else '0')
+            env['XDG_CONFIG_HOME'] = str(data / 'xdg')
+            if save_log is None:
+                env.pop('BB_SAVE_LOG', None)
+            for key in ('BB_FREE_CHECK', 'BB_WRITE_LOG', 'BB_PRODUCER_CHECK',
+                        'BB_FRAME_LOG', 'BB_READBACK_LOG', 'BB_SESSION_LOG'):
+                env.pop(key, None)
+            if settings is not None:
+                profile = data / 'xdg/bbport-launcher/settings.json'
+                profile.parent.mkdir(parents=True)
+                profile.write_text(settings if isinstance(settings, str) else json.dumps(settings))
+            env.update(overrides or {})
             for key in ('BB_RENDER_RES', 'BB_OUTPUT_RES', 'BB_AUTO_RENDER_RES', 'BB_TEST_STAGE'):
                 env.pop(key, None)
             env.pop('BB_LIVE_RES', None)
@@ -83,6 +98,8 @@ class RestartResolutionTests(unittest.TestCase):
                            str(stream), shutil.which('bash')]
             subprocess.run(command, cwd=ROOT, env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=30)
+            self.saved_logs = [p.read_text() for p in (data / 'logs').glob('*.log')]
+            self.probe_hash = hashlib.sha256(probe.read_bytes()).hexdigest()
             return [json.loads(line) for line in (data / 'environments').read_text().splitlines()]
 
     def test_outputs_other_than_1080p_patch_the_render_size_and_restarts_recompute_it(self):
@@ -124,3 +141,48 @@ class RestartResolutionTests(unittest.TestCase):
     def test_saved_logging_preserves_an_inherited_stream(self):
         rows = self.run_restarts(save_log=True)
         self.assertEqual(rows[0]['caller_stream'], 'caller-owned stream\n')
+
+    def test_saved_provenance_hashes_and_restart_logs_survive(self):
+        rows = self.run_restarts(save_log=True)
+        self.assertEqual(len(self.saved_logs), 3)
+        for text in self.saved_logs:
+            records = [json.loads(line.removeprefix('Launch provenance: '))
+                       for line in text.splitlines() if line.startswith('Launch provenance: ')]
+            self.assertTrue(records, text)
+            files = records[0]['files']
+            self.assertEqual(files['selected_probe']['sha256'], self.probe_hash)
+            self.assertEqual(files['boot']['sha256'],
+                             hashlib.sha256(b'fixture-boot-image').hexdigest())
+        for stage in range(3):
+            self.assertTrue(any(f'diagnostic-test-stage={stage}' in text
+                                for text in self.saved_logs))
+        for key in ('BB_FRAME_LOG', 'BB_READBACK_LOG'):
+            self.assertEqual(len({row[key] for row in rows}), 3)
+
+    def test_cli_uses_saved_diagnostics_without_overriding_callers(self):
+        rows = self.run_restarts(settings={'crash_diag': True, 'save_log': True})
+        for row in rows:
+            for key in ('BB_FREE_CHECK', 'BB_WRITE_LOG', 'BB_PRODUCER_CHECK', 'BB_SAVE_LOG'):
+                self.assertEqual(row[key], '1')
+        rows = self.run_restarts(settings={'crash_diag': True, 'save_log': True},
+                                 overrides={'BB_FREE_CHECK': '0', 'BB_WRITE_LOG': '2',
+                                            'BB_PRODUCER_CHECK': '0', 'BB_SAVE_LOG': '0'})
+        for row in rows:
+            self.assertEqual([row[key] for key in ('BB_FREE_CHECK', 'BB_WRITE_LOG',
+                                                   'BB_PRODUCER_CHECK', 'BB_SAVE_LOG')],
+                             ['0', '2', '0', '0'])
+
+    def test_custom_statistics_paths_survive_restart(self):
+        rows = self.run_restarts(save_log=True,
+                                 overrides={'BB_FRAME_LOG': '/caller/frames.csv',
+                                            'BB_READBACK_LOG': '/caller/readbacks.csv'})
+        for row in rows:
+            self.assertEqual(row['BB_FRAME_LOG'], '/caller/frames.csv')
+            self.assertEqual(row['BB_READBACK_LOG'], '/caller/readbacks.csv')
+
+    def test_cli_rejects_invalid_diagnostic_settings_before_probe(self):
+        for settings in ('{"crash_diag":', [], {'crash_diag': 'true'}, {'save_log': 1}):
+            with self.subTest(settings=settings), self.assertRaises(subprocess.CalledProcessError) as error:
+                self.run_restarts(settings=settings)
+            self.assertEqual(error.exception.returncode, 1)
+            self.assertIn(b'Crash diagnostic settings', error.exception.stderr)

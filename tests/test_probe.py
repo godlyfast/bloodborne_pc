@@ -1,5 +1,6 @@
 """Boundary tests for the native loader; uses tiny synthetic x86-64 images."""
 from paths import ROOT
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -118,6 +119,26 @@ class LoaderTests(unittest.TestCase):
         self.assertEqual(r.returncode, 132)
         self.assertIn('at guest offset 0x0,', r.stderr)
 
+    def test_fatal_signal_reports_full_context(self):
+        r = self.run_image(package(b'\x0f\x0b'))
+        self.assertEqual(r.returncode, 132, r.stderr)
+        for register in ('RAX', 'RBX', 'RCX', 'RDX', 'RSI', 'RDI', 'RBP', 'RSP',
+                         'R8', 'R9', 'R10', 'R11', 'R12', 'R13', 'R14', 'R15',
+                         'RIP', 'RFLAGS', 'ERR', 'TRAPNO'):
+            self.assertRegex(r.stderr, rf'\b{register}=[0-9a-f]{{16}}\b')
+
+    def test_guest_store_fault_preserves_addressing_registers(self):
+        value = 0x1122334455667788
+        # xor r12,r12; movabs r13,value; mov [r12+8],r13.
+        code = b'\x4d\x31\xe4\x49\xbd' + struct.pack('<Q', value) + b'\x4d\x89\x6c\x24\x08'
+        r = self.run_image(package(code))
+        self.assertEqual(r.returncode, 139, r.stderr)
+        self.assertIn('address 0x8', r.stderr)
+        self.assertIn('R12=0000000000000000', r.stderr)
+        self.assertIn(f'R13={value:016x}', r.stderr)
+        self.assertIn('signal=000000000000000b', r.stderr)
+        self.assertIn('address=0000000000000008', r.stderr)
+
     def test_runtime_returns_from_verified_init_env(self):
         # Align stack, call _init_env through +32, then tail-jump to unknown +40.
         code = b'\x48\x83\xec\x08\xff\x15\x16\0\0\0\x48\x83\xc4\x08\xff\x25\x14\0\0\0'
@@ -139,6 +160,62 @@ class LoaderTests(unittest.TestCase):
         r = self.run_image(package(b'\xc3',capabilities=2))
         self.assertEqual(r.returncode,1)
         self.assertIn('unknown runtime capabilities',r.stderr)
+
+
+class FaultContextTests(unittest.TestCase):
+    def test_essential_registers_precede_optional_gpu_diagnostics(self):
+        # Exercise the production handler; the optional diagnostic deliberately cannot finish.
+        source = r'''
+#define main probe_program_main
+#include "src/probe.c"
+#undef main
+__thread sigjmp_buf *runtime_fault_recover;
+void runtime_re_watch_report(void) {}
+int bbgpu_handle_fault(void *context, void *address) {
+    (void)context; (void)address; return 0;
+}
+void bbgpu_dump_guest_writes(void *context) {
+    (void)context;
+    const char marker[] = "optional GPU diagnostic failed\n";
+    ssize_t n = write(2, marker, sizeof(marker)-1); (void)n;
+    _exit(99);
+}
+static void deliver(int sig, siginfo_t *info, void *context) {
+    ucontext_t *uc = context;
+    for (int i=0; i<NGREG; ++i) uc->uc_mcontext.gregs[i] = 0x1000+i;
+    gpu_enabled = 1;
+    fault(sig, info, context);
+}
+int main(void) {
+    struct sigaction action = {0};
+    action.sa_sigaction = deliver; action.sa_flags = SA_SIGINFO;
+    sigemptyset(&action.sa_mask); sigaction(SIGILL, &action, NULL);
+    raise(SIGILL);
+    return 1;
+}
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'fault.c'
+            path.write_text(source)
+            exe = Path(tmp) / 'fault'
+            subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-O2',
+                            '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
+                            '-I', str(ROOT), '-I', str(ROOT / 'src'), str(path),
+                            '-pthread', '-ldl', '-o', str(exe)], check=True,
+                           capture_output=True, text=True)
+            r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=5)
+        self.assertEqual(r.returncode, 99, r.stderr)
+        registers = ('R8', 'R9', 'R10', 'R11', 'R12', 'R13', 'R14', 'R15',
+                     'RDI', 'RSI', 'RBP', 'RBX', 'RDX', 'RAX', 'RCX', 'RSP',
+                     'RIP', 'RFLAGS')
+        essential = r.stderr.split('optional GPU diagnostic failed')[0]
+        self.assertIn('signal=0000000000000004', essential)
+        for field in ('si_code', 'address', 'image'):
+            self.assertRegex(essential, rf'\b{field}=[0-9a-f]{{16}}\b')
+        for index, register in enumerate(registers):
+            self.assertIn(f'{register}={0x1000 + index:016x}', essential)
+        self.assertIn('ERR=0000000000001013', essential)
+        self.assertIn('TRAPNO=0000000000001014', essential)
 
 
 if __name__ == '__main__':

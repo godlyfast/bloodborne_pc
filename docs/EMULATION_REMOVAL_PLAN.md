@@ -193,8 +193,8 @@ What of emulation actually remains, and does Bloodborne use it:
 | CPU writes to GPU-visible memory are "declared" (`memcpy` wrappers, hooks on loaders, heap, allocator, file reads) | yes — for VRAM copies and textures; `BB_WRITE_VERIFY` on the route found no undeclared writes beyond the expected ones |
 | The game's copy shader — substitution (the list is read by the CPU) | yes; can now be translated (`BB_COPY_SHADER_NATIVE=1`) |
 
-The "no" rows are needed only for porting to other games (Driveclub, inFAMOUS: they have
-asynchronous compute and occlusion) — they cannot be checked on Bloodborne.
+The "no" rows are needed only for porting to other games (where asynchronous compute and
+occlusion exist) — they cannot be checked on Bloodborne.
 
 The copy shader (`cs fefebf9f`): the substitution can be replaced by translating the shader
 itself. Doing so revealed the real danger of the new model: next to where it copies lie shader

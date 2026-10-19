@@ -38,12 +38,53 @@ if [[ -z ${BB_PREBUILT:-} && -z ${BB_IN_NIX_SHELL:-} ]] && ! { command -v pkg-co
     args=''; if (( $# )); then args=$(printf '%q ' "$@"); fi
     exec env BB_IN_NIX_SHELL=1 nix-shell shell.nix --run "bash run.sh $args"
 fi
+if [[ -z ${PYTHON:-} ]]; then
+    PYTHON=$(command -v python3 || true)
+    if [[ -z $PYTHON ]]; then
+        for candidate in /nix/store/*-python3-*/bin/python3; do
+            if [[ -x $candidate ]]; then PYTHON=$candidate; break; fi
+        done
+    fi
+fi
+if [[ -z ${PYTHON:-} ]]; then echo 'Install Python 3 or set PYTHON.' >&2; exit 1; fi
+# Normal CLI launches use the same crash controls as the graphical launcher.
+diagnostics=$("$PYTHON" -c '
+import json, os
+from pathlib import Path
+p = Path(os.environ.get("XDG_CONFIG_HOME", Path.home()/".config"))/"bbport-launcher/settings.json"
+try:
+    with p.open() as f:
+        s = json.load(f)
+except FileNotFoundError:
+    s = {}
+except (OSError, ValueError) as error:
+    raise SystemExit(f"Crash diagnostic settings {p}: {error}")
+if not isinstance(s, dict):
+    raise SystemExit(f"Crash diagnostic settings {p}: expected a JSON object")
+for key in ("crash_diag", "save_log"):
+    if key in s and not isinstance(s[key], bool):
+        raise SystemExit(f"Crash diagnostic settings {p}: {key} must be boolean")
+print(int(s.get("crash_diag") is True), int(s.get("save_log") is True))
+')
+read -r crash_diag save_log <<< "$diagnostics"
+if [[ $crash_diag == 1 ]]; then
+    export BB_FREE_CHECK=${BB_FREE_CHECK-1} BB_WRITE_LOG=${BB_WRITE_LOG-1} BB_PRODUCER_CHECK=${BB_PRODUCER_CHECK-1}
+fi
+if [[ $save_log == 1 ]]; then export BB_SAVE_LOG=${BB_SAVE_LOG-1}; fi
 # BB_SAVE_LOG=1 (launcher: "Save the log and statistics to a file"): this run's output and its
 # per-frame statistics also go to $data/logs/<time>.log, .frames.csv and .readbacks.csv.
 if [[ ${BB_SAVE_LOG:-} == 1 ]]; then
     logs=$data/logs
     mkdir -p "$logs"
     printf -v stamp '%(%Y%m%d_%H%M%S)T' -1
+    stamp+="_$$"
+    # Re-exec can keep the PID and occur in the same second; never truncate its previous log.
+    while [[ -e $logs/$stamp.log ]]; do stamp+="_"; done
+    if [[ -n ${BB_SESSION_LOG:-} ]]; then
+        [[ ${BB_FRAME_LOG:-} == "${BB_SESSION_LOG%.log}.frames.csv" ]] && unset BB_FRAME_LOG
+        [[ ${BB_READBACK_LOG:-} == "${BB_SESSION_LOG%.log}.readbacks.csv" ]] && unset BB_READBACK_LOG
+    fi
+    export BB_SESSION_LOG=$logs/$stamp.log
     export BB_FRAME_STATS=1 BB_FRAME_LOG=${BB_FRAME_LOG:-$logs/$stamp.frames.csv}
     export BB_READBACK_LOG=${BB_READBACK_LOG:-$logs/$stamp.readbacks.csv}
     echo "Log: $logs/$stamp.log"
@@ -54,15 +95,6 @@ if [[ ${BB_SAVE_LOG:-} == 1 ]]; then
     # Only the logger needs this descriptor; do not carry it through game restarts.
     exec {bb_log_fd}>&-
 fi
-if [[ -z ${PYTHON:-} ]]; then
-    PYTHON=$(command -v python3 || true)
-    if [[ -z $PYTHON ]]; then
-        for candidate in /nix/store/*-python3-*/bin/python3; do
-            if [[ -x $candidate ]]; then PYTHON=$candidate; break; fi
-        done
-    fi
-fi
-if [[ -z ${PYTHON:-} ]]; then echo 'Install Python 3 or set PYTHON.' >&2; exit 1; fi
 # BB_GAME_DIR: the game's folder (eboot.bin, sce_module, ...); default next to this directory.
 game=${BB_GAME_DIR:-../CUSA03173}
 if [[ ! -f $game/eboot.bin ]]; then echo "No eboot.bin in $game (set BB_GAME_DIR)." >&2; exit 1; fi
@@ -84,8 +116,10 @@ if [[ ${BB_AUTO_RENDER_RES:-} == 1 ]]; then
     unset BB_RENDER_RES BB_OUTPUT_RES BB_AUTO_RENDER_RES
 fi
 # BB_RENDER_RES=WxH explicitly sets the game's render resolution (a patch at start).
-# Frame rate: BB_FPS=uncap (default; delta-time patch, vblank 480 Hz, frames shown at once),
-# 60/90 (fixed-timestep patches) or 30 (unpatched). BB_PATCHES adds patch names ("a;b").
+# Frame rate: BB_FPS=uncap (default; hooks in the game's code, gpu/shim/bbport_frame_rate.cpp:
+# each frame's real time; vblank 480 Hz, frames shown at once; BB_FRAME_HOOKS=0: the patches),
+# 60/90 (the same hooks, at most 60/90 frames a second) or 30 (the game's own). BB_PATCHES adds
+# patch names ("a;b").
 fps=${BB_FPS:-uncap}
 # bbport.ini output_res other than 1080p (720p for the Steam Deck, 1440p, 2160p): the whole game
 # renders at the preset's size of the output (a patch), the upscaler fills the output, the UI is
@@ -132,13 +166,14 @@ fi
 # (BB_GUEST_IN_PLACE below implies it: it commits all allocated memory up front and rules out BB_UFFD).
 export BB_PREUPLOAD=${BB_PREUPLOAD:-1}
 # Memory model and translation. BB_PC_MODEL=1 (the launcher's "Memory model": "Auto" gives it to
-# AMD GPUs, the 0.3 model to the others; BB_PC_MODEL=1/0 by hand) selects how a PC release would
+# every GPU; BB_PC_MODEL=1/0 by hand) selects how a PC release would
 # work: the GPU uses the game's memory where it is (GPU-visible system memory) and keeps the data
 # it reads often in VRAM, the command processor's work is translated rather than emulated
-# (BB_GUEST_IN_PLACE=1 and what depends on it). AMD keeps the game's memory in a sparse arena;
-# other GPUs get the layer's memory module, which binds it in place and keeps VRAM copies without
-# sparse binding (NVIDIA's sparse binding stalls the GPU for seconds); BB_LAYER_MEMORY=1/0 by hand.
-# 0 (the default off AMD): the model of 0.3 (VRAM copies of the game's memory, write tracking),
+# (BB_GUEST_IN_PLACE=1 and what depends on it). Every GPU gets the layer's memory module, which
+# binds the game's memory in place and keeps VRAM copies without sparse binding (NVIDIA's sparse
+# binding stalls the GPU for seconds; on AMD it is faster than the sparse arena too);
+# BB_LAYER_MEMORY=0: AMD's sparse arena, as before 0.52.
+# 0: the model of 0.3 (VRAM copies of the game's memory, write tracking),
 # with the fixes made since. BB_GUEST_IN_PLACE set by hand overrides it.
 # BB_AS_0_3=1 (the launcher's developer switch "Synchronisation as in 0.3"): what changed since the
 # 0.3 release is reverted for comparisons: the 0.3 memory model, WRITE_DATA/DMA waiting for every
@@ -148,16 +183,12 @@ gpu_vendor= gpu_name=
 if [[ -z ${BB_PC_MODEL:-} || ( ${BB_AUTO_NOHIZ:-1} != 0 && -z ${RADV_DEBUG:-} ) ]]; then
     IFS=$'\t' read -r gpu_vendor gpu_name < <("$caps" --device 2> /dev/null) || true
 fi
-# Memory model left to the port: the new one on AMD (0x1002), the 0.3 one elsewhere (NVIDIA's
-# path through the memory module is still being measured with testers).
+# Memory model left to the port: the new one on every GPU (0.6). It goes through the layer's memory
+# module: no sparse binding of the game's memory, so nothing NVIDIA-specific stalls; a driver that
+# fails the startup checks (BbGuestMemory::Usable) still falls back to VRAM copies by itself.
 if [[ -z ${BB_PC_MODEL:-} ]]; then
-    if [[ $gpu_vendor == 0x1002 ]]; then
-        export BB_PC_MODEL=1
-        echo "Memory model: new (AMD GPU${gpu_name:+, $gpu_name}; BB_PC_MODEL=0: the 0.3 model)"
-    else
-        export BB_PC_MODEL=0
-        echo "Memory model: the 0.3 one (${gpu_name:-GPU unknown}; BB_PC_MODEL=1: the new one)"
-    fi
+    export BB_PC_MODEL=1
+    echo "Memory model: new (${gpu_name:-GPU unknown}; BB_PC_MODEL=0: the 0.3 model)"
 fi
 # GCN 3-5 under RADV (Polaris, Vega and their APUs): with HiZ, depth compression showed black
 # halos and missing geometry (issues #54, #99); RADV_DEBUG=nohiz fixed it at some cost. Set
@@ -204,7 +235,7 @@ export BB_COPY_GPU_BUFFERS=${BB_COPY_GPU_BUFFERS:-1}
 # up to BB_GPU_WRITE_TWINS_MAX bytes per page) does not wait for the GPU (BufferCache twins).
 export BB_GPU_WRITE_TWINS=${BB_GPU_WRITE_TWINS:-1} BB_GPU_WRITE_TWINS_MAX=${BB_GPU_WRITE_TWINS_MAX:-65536}
 if [[ -z ${BB_VBLANK_HZ:-} ]]; then
-    case $fps in uncap) export BB_VBLANK_HZ=480 ;; 90) export BB_VBLANK_HZ=90 ;; *) export BB_VBLANK_HZ=60 ;; esac
+    case $fps in uncap) export BB_VBLANK_HZ=1000 ;; 90) export BB_VBLANK_HZ=90 ;; *) export BB_VBLANK_HZ=60 ;; esac
 fi
 # FSR 4: faster post passes next to the downloaded ones (incremental; tools/fsr4_optimize.sh).
 if [[ -z ${BB_PREBUILT:-} && -d fsr4_shaders ]] && command -v spirv-cross >/dev/null; then
@@ -212,14 +243,28 @@ if [[ -z ${BB_PREBUILT:-} && -d fsr4_shaders ]] && command -v spirv-cross >/dev/
 fi
 if [[ -n ${BB_PREBUILT:-} ]]; then
     probe=${BB_PROBE:-bin/bb-probe}
+    native_probe=bin/bb-probe
 else
     bash build.sh
     probe=${BB_PROBE:-out/bb-probe}  # BB_PROBE: a wrapper (gdb) around it
+    native_probe=out/bb-probe
 fi
 # Online play (BB_ONLINE=1, launcher: Online; the online module gpu/bbnet): the game's own server
 # goes to the community server, summon signs to the shadNet WebAPI (scripts/online.py).
 if [[ ${BB_ONLINE:-0} == 1 && -f scripts/online.py ]]; then
-    export BB_SHADNET_SERVER=${BB_SHADNET_SERVER:-srv.shadps4.net:31313}
+    # The shadPS4 0.20 module (gpu/bbnet20) answers both pools: Seamless Hunt (shadNet with BBSC) and
+    # The Hunter's Dream (BB_NET_BACKEND=thd, without BBSC). BB_NET_GEN=19: the older shadp2p module
+    # (gpu/bbnet) with BBSC, kept as a fallback.
+    export BB_NET_GEN=${BB_NET_GEN:-20}
+    if [[ ${BB_NET_BACKEND:-} == thd ]]; then
+        BB_NET_GEN=20
+        unset BB_BBSC
+    fi
+    if [[ $BB_NET_GEN == 20 && -z ${BB_NET_MODULE:-} ]]; then
+        if [[ -n ${BB_PREBUILT:-} ]]; then BB_NET_MODULE=$PWD/bin/gpu/libbbnet20.so; else BB_NET_MODULE=$PWD/out/gpu/libbbnet20.so; fi
+        export BB_NET_MODULE
+    fi
+    export BB_SHADNET_SERVER=${BB_SHADNET_SERVER:-play.seamlesshunt.com:31313}
     # HTTPS needs CA certificates: OpenSSL from Nix looks only in its own store path (the
     # packaged wrapper brings a bundle; from source the system's is taken).
     if [[ ! -r ${SSL_CERT_FILE:-} ]]; then
@@ -228,8 +273,79 @@ if [[ ${BB_ONLINE:-0} == 1 && -f scripts/online.py ]]; then
         done
     fi
     [[ -n ${BB_SHADNET_WEBAPI:-} ]] || export BB_SHADNET_WEBAPI=http://${BB_SHADNET_SERVER%:*}:31315
-    SHADPS4_HTTP_HOST_OVERRIDES_JSON=$("$PYTHON" scripts/online.py overrides --user "${BB_USER_DIR:-$data/user}") || true
-    export SHADPS4_HTTP_HOST_OVERRIDES_JSON
+    # BBSC: its game server on this PC when the server's own does not answer (online.py
+    # bbsc-local). It lives as long as the game: a watcher stops it when this process (exec'd into
+    # the game below) is gone. Messages and bloodstains are then this PC's only.
+    if [[ ${BB_BBSC:-0} == 1 && -f scripts/bbsc_gameserver/bbsc_gameserver.py ]]; then
+        bbsc_shadnet=$("$PYTHON" scripts/online.py bbsc-local) || bbsc_shadnet=
+        if [[ -n $bbsc_shadnet ]]; then
+            bbsc_dir=${BB_USER_DIR:-$data/user}/bbsc
+            mkdir -p "$bbsc_dir/logs"
+            game_pid=$$
+            if ! (exec 3<>/dev/tcp/127.0.0.1/20443) 2>/dev/null; then
+                ( "$PYTHON" scripts/bbsc_gameserver/bbsc_gameserver.py --shadnet "$bbsc_shadnet" \
+                      --host 127.0.0.1 --port 20443 --relay-port 0 --no-bbhost --no-playlog \
+                      --data "$bbsc_dir/online-data.json" --log-dir "$bbsc_dir/logs" \
+                      > "$bbsc_dir/logs/gameserver-console.log" 2>&1 &
+                  server_pid=$!
+                  while kill -0 "$game_pid" 2>/dev/null && kill -0 "$server_pid" 2>/dev/null; do sleep 2; done
+                  kill "$server_pid" 2>/dev/null ) &
+                echo "Co-op: BBSC game server on 127.0.0.1:20443 (summons -> $bbsc_shadnet:31315)"
+            else
+                echo "Co-op: a game server answers on 127.0.0.1:20443 already: used"
+            fi
+            export BB_COMMUNITY_SERVER=http://127.0.0.1
+        fi
+    fi
+    user_data=${BB_USER_DIR:-$data/user}
+    if [[ ${BB_NET_BACKEND:-} == thd ]]; then
+        # The Hunter's Dream (bbhost's protocol): the account comes from the launcher's Discord sign-in.
+        if [[ -z ${BB_THD_TOKEN:-} || -z ${BB_THD_ONLINE_ID:-} ]]; then
+            echo "The Hunter's Dream: not signed in (launcher: Online -> Sign in with Discord)." >&2; exit 1
+        fi
+        thd_out=$("$PYTHON" scripts/online.py thd-overrides --user "$user_data") || exit 1
+        SHADPS4_HTTP_HOST_OVERRIDES_JSON=$(sed -n 1p <<<"$thd_out")
+        thd_base=$(sed -n 2p <<<"$thd_out")
+        export SHADPS4_HTTP_HOST_OVERRIDES_JSON BB_THD_SERVER=${BB_THD_SERVER:-$thd_base:18671} BB_THD_AUTH=${BB_THD_AUTH:-$thd_base}
+        unset BB_SHADNET_SERVER BB_SHADNET_WEBAPI BB_SHADNET_NPID BB_SHADNET_PASSWORD BB_SHADNET_TOKEN
+    else
+        SHADPS4_HTTP_HOST_OVERRIDES_JSON=$("$PYTHON" scripts/online.py overrides --user "$user_data") || true
+        export SHADPS4_HTTP_HOST_OVERRIDES_JSON
+    fi
+fi
+if [[ ${BB_SAVE_LOG:-} == 1 ]]; then
+    # Keep identities, not image copies: preparation overwrites these files on the next launch.
+    "$PYTHON" -c '
+import datetime, hashlib, json, os, subprocess, sys
+from pathlib import Path
+def identity(name):
+    p = Path(name)
+    try:
+        with p.open("rb") as f:
+            digest = hashlib.file_digest(f, "sha256").hexdigest()
+        return dict(path=str(p.resolve()), bytes=p.stat().st_size, sha256=digest)
+    except OSError as error:
+        return dict(path=str(p), unavailable=str(error))
+selected, native, out, config = sys.argv[1:]
+settings = Path(os.environ.get("XDG_CONFIG_HOME", Path.home()/".config"))/"bbport-launcher/settings.json"
+paths = dict(selected_probe=selected, native_probe=native,
+             gpu_library=str(Path(native).parent/"gpu/libbbgpu.so"),
+             boot=str(Path(out)/"boot-linked.bin"), content=str(Path(out)/"content.bin"),
+             patches=str(Path(out)/"patches.bin"), config=config, settings=str(settings),
+             probe_source="src/probe.c", run_source="run.sh", build_receipt="BUILD-RECEIPT.json")
+try:
+    head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True)
+    source = head.stdout.strip() if head.returncode == 0 else "unavailable"
+except OSError:
+    source = "unavailable"
+record = dict(utc=datetime.datetime.now(datetime.timezone.utc).isoformat(), source_head=source,
+              files={key:identity(path) for key,path in paths.items()},
+              runtime={key:os.environ.get(key) for key in (
+                  "BB_PC_MODEL", "BB_PRESENT_MODE", "BB_FPS_LIMIT", "BB_FREE_CHECK",
+                  "BB_WRITE_LOG", "BB_PRODUCER_CHECK", "BB_SAVE_LOG", "BB_FRAME_LOG",
+                  "BB_READBACK_LOG", "BB_BREADCRUMBS", "BB_GPU_LOG")})
+print("Launch provenance: "+json.dumps(record, separators=(",", ":")), flush=True)
+' "$probe" "$native_probe" "$out" "$BB_CONFIG"
 fi
 probe_args=("$out/boot-linked.bin" --content-profile "$out/content.bin" --patches "$out/patches.bin" --app0 "$game" --user "${BB_USER_DIR:-$data/user}" --timeout "${BB_TIMEOUT:-0}" "$@")
 if [[ -n ${mod_game:-} ]]; then

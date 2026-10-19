@@ -18,7 +18,7 @@ Goal: the new memory model on all video cards.
 ## The solution: the layer's memory module
 
 Instead of the sparse arena, a dedicated memory module runs (`gpu/layer/bblayer_gpu_memory.*`,
-`gpu/shadps4/video_core/buffer_cache/buffer_cache_layer.cpp`, plan — `MEMORY_MODULE_PLAN.md`):
+`gpu/buffers/buffer_cache.cpp`, plan — `MEMORY_MODULE_PLAN.md`):
 
 - the game's memory is bound **in place**, through buffers of its chunks (dma-buf on AMD, host memory
   import `VK_EXT_external_memory_host` on NVIDIA);

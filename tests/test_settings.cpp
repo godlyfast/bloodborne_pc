@@ -17,6 +17,9 @@ static std::string Read(const char* path) {
 }
 
 int main() {
+    assert(!BbSettings::IsHotEffect(6)); // SSR resizes resources on restart.
+    assert(BbSettings::IsHotEffect(7));  // Bloom still switches live.
+    assert(!BbSettings::IsHotEffect(8)); // Startup intros.
     char path[] = "/tmp/bbport-settings-test-XXXXXX";
     const int fd = mkstemp(path);
     assert(fd >= 0);
@@ -47,6 +50,19 @@ int main() {
     s.menu_y = -1.0f;
     BbSettings::Load();
     assert(s.menu_x == 0.625f && s.menu_y == 0.125f && s.upscaler == BbSettings::UpscalerFsr411);
+    s.aspect = BbSettings::Aspect21x9;
+    s.output_res = BbSettings::PackSize({2560, 1080});
+    s.effects[7] = false;
+    BbSettings::Save();
+    s.aspect = BbSettings::Aspect16x9;
+    s.output_res = BbSettings::PackSize(BbSettings::OutputDefault);
+    s.effects[7] = true;
+    BbSettings::Load();
+    assert(s.aspect == BbSettings::Aspect21x9);
+    assert((BbSettings::CurrentOutput() == BbSettings::OutputSize{2560, 1080}));
+    assert(!s.effects[7]);
+    assert((BbSettings::NearestOutput(BbSettings::Aspect16x10, {2560, 1080}) ==
+            BbSettings::OutputSize{1680, 1050}));
     unlink(path);
-    std::puts("PASS: settings save keeps other keys, menu position");
+    std::puts("PASS: settings save keeps other keys, menu position, aspect, output and effects");
 }

@@ -8,6 +8,7 @@ its output. Launcher settings live in ~/.config/bbport-launcher/settings.json.
 """
 
 import json
+import math
 import shutil
 import os
 import re
@@ -37,13 +38,13 @@ DATA_DIR = Path(os.environ.get("BB_DATA_DIR", PORT_DIR))
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "bbport-launcher"
 CONFIG_FILE = CONFIG_DIR / "settings.json"
 MAX_LOG_LINES = 5000
-# The memory model (run.sh: BB_PC_MODEL): "auto" leaves it to the GPU (the new one on AMD, the
-# 0.3 one elsewhere), or either by hand. The new one goes through the layer's memory module on
+# The memory model (run.sh: BB_PC_MODEL): "auto" is the new one on every GPU (0.6), or either by
+# hand. The new one goes through the layer's memory module on
 # every GPU (no sparse binding of the game's memory; BB_LAYER_MEMORY=0: AMD's sparse arena).
 PC_MODEL_SUBTITLE = ("The new one: the GPU works with the game's memory directly, as in a PC game, and graphics "
                      "commands are translated rather than emulated. The old one: the memory model of 0.3 with all "
                      "the fixes. If the driver fails the startup check, the old one")
-MEMORY_MODELS = [("Auto: new on AMD, old on others", "auto"), ("New", "new"),
+MEMORY_MODELS = [("Auto: new on every GPU", "auto"), ("New", "new"),
                  ("Old (as in 0.3)", "old")]
 # FSR 4.1.1 assets built from the user's AMD DLL (tools/fsr4cap, also in the package).
 FSR4CAP_DIR = PORT_DIR / "tools" / "fsr4cap"
@@ -79,7 +80,53 @@ UPSCALERS = [("FSR 4", "fsr4"), ("FSR 4.1.1", "fsr411"), ("FSR 3", "fsr3"),
              ("TAA (native anti-aliasing)", "taa"), ("Off", "off")]
 PRESETS = [("Native AA", 0), ("Quality (x1.5)", 1), ("Balanced (x1.7)", 2),
            ("Performance (x2)", 3), ("Ultra Performance (x3)", 4)]
-OUTPUT_RES = [("1280×720 (Steam Deck)", "1280x720"), ("1920×1080", "1920x1080"), ("2560×1440", "2560x1440"), ("3840×2160", "3840x2160")]
+# Output aspect ratios and their resolutions (gpu/shim/bbport_settings.cpp, the same lists): the
+# game keeps its 1920x1080 frame; for another aspect ratio its camera sees more to the sides (above
+# and below) and the UI keeps to the screen edges, changed live. Auto: the monitor's group.
+ASPECTS = ["auto", "4:3", "16:10", "16:9", "21:9", "32:9"]
+ASPECT_RATIOS = {"4:3": 4 / 3, "16:10": 16 / 10, "16:9": 16 / 9, "21:9": 64 / 27, "32:9": 32 / 9}
+OUTPUTS = {
+    "4:3": [(640, 480), (800, 600), (1024, 768), (1280, 960), (1440, 1080), (1600, 1200), (2048, 1536),
+            (2880, 2160)],
+    "16:10": [(640, 400), (960, 600), (1280, 800), (1440, 900), (1680, 1050), (1920, 1200), (2560, 1600),
+              (3840, 2400)],
+    "16:9": [(640, 360), (854, 480), (960, 540), (1280, 720), (1600, 900), (1920, 1080), (2560, 1440),
+             (3200, 1800), (3840, 2160)],
+    "21:9": [(860, 360), (1280, 540), (1720, 720), (2560, 1080), (3440, 1440), (3840, 1600), (5120, 2160)],
+    "32:9": [(1280, 360), (1920, 540), (2560, 720), (3840, 1080), (5120, 1440), (7680, 2160)],
+}
+
+
+def resolved_aspect(aspect, monitor):
+    """The aspect ratio group: Auto is the one nearest the monitor's (16:9 when unknown)."""
+    if aspect in OUTPUTS:
+        return aspect
+    if not monitor:
+        return "16:9"
+    ratio = monitor[0] / monitor[1]
+    return min(OUTPUTS, key=lambda a: abs(math.log(ratio / ASPECT_RATIOS[a])))
+
+
+def output_sizes(aspect, monitor):
+    """The resolutions of an aspect ratio; Auto adds the monitor's own size."""
+    sizes = list(OUTPUTS[resolved_aspect(aspect, monitor)])
+    if (aspect == "auto" and monitor and monitor not in sizes and 640 <= monitor[0] <= 7680
+            and 360 <= monitor[1] <= 4320):
+        sizes = sorted(sizes + [monitor], key=lambda size: (size[1], size[0]))
+    return sizes
+
+
+def nearest_output(sizes, size):
+    """The size itself if listed, else the one nearest in height (another aspect ratio keeps it)."""
+    return size if size in sizes else min(sizes, key=lambda s: abs(s[1] - size[1]))
+
+
+def parse_size(text, default=(1920, 1080)):
+    try:
+        w, h = (int(v) for v in text.lower().split("x"))
+        return (w, h) if w > 0 and h > 0 else default
+    except ValueError:
+        return default
 # Game effects (patches applied at start): bbport.ini key, title, default.
 EFFECTS = [
     ("effect_chromatic_aberration", "Chromatic aberration", True),
@@ -89,13 +136,14 @@ EFFECTS = [
     ("effect_game_aa", "The game's own anti-aliasing", True),
     ("effect_dynamic_shadows", "Dynamic light shadows", True),
     ("effect_ssr", "SSR reflections (not in the original game)", False),
+    ("effect_bloom", "Bloom", True),
     ("skip_intro", "Skip the intro videos", False),
-    ("debug_camera", "Free camera (Cross + L3 / Space + Z)", False),
-    ("debug_menu", "Debug menu (left touchpad / Tab; needs fonts)", False),
+    ("debug_camera", "Free camera (Cross + L3 / F + Ctrl)", False),
+    ("debug_menu", "Debug menu (left touchpad / G; needs fonts)", False),
 ]
 MODEL_LOD = [("As in the game", "0"), ("Highest (-2)", "-2"), ("Lower (1)", "1"),
              ("Lowest (2)", "2")]
-FPS_MODES = [("Unlocked (patch)", "uncap"), ("60", "60"), ("90", "90"),
+FPS_MODES = [("Unlocked", "uncap"), ("60", "60"), ("90", "90"),
              ("30 (as on PS4)", "30")]
 PRESENT_MODES = [("Mailbox", "Mailbox"), ("FIFO (VSync)", "Fifo"),
                  ("FIFO Relaxed", "FifoRelaxed"), ("Immediate", "Immediate")]
@@ -103,8 +151,14 @@ PRESENT_MODES = [("Mailbox", "Mailbox"), ("FIFO (VSync)", "Fifo"),
 # choice labels stay short, so the selected one is shown in full.
 DRAW_PIPE = [("Auto", "", "On with 8 or more CPU threads"), ("On", "1"),
              ("Off", "0", "More stable, but slower")]
-LANGUAGES = [("English", "1"), ("Russian", "8"), ("Japanese", "0"), ("French", "2"),
-             ("Spanish", "3"), ("German", "4"), ("Italian", "5")]
+# The game's text languages (dvdroot_ps4/msg) by the PS4 system language code (#249).
+LANGUAGES = [("English", "1"), ("English (United Kingdom)", "18"), ("Russian", "8"),
+             ("Japanese", "0"), ("French", "2"), ("Spanish", "3"),
+             ("Spanish (Latin America)", "20"), ("German", "4"), ("Italian", "5"),
+             ("Dutch", "6"), ("Portuguese", "7"), ("Portuguese (Brazil)", "17"),
+             ("Polish", "16"), ("Turkish", "19"), ("Korean", "9"),
+             ("Chinese (Simplified)", "11"), ("Chinese (Traditional)", "10"),
+             ("Finnish", "12"), ("Swedish", "13"), ("Danish", "14"), ("Norwegian", "15")]
 LIVE_RESOLUTION = [("Auto (by GPU)", "auto"), ("Off (faster)", "0"), ("On", "1")]
 READBACKS = [("Relaxed", "", "Default"), ("Off", "0"), ("Precise", "2")]
 # Background pre-upload of the game's GPU memory into VRAM (BB_PREUPLOAD): auto = on with a discrete GPU.
@@ -124,6 +178,8 @@ DEFAULTS = {
     "gamepad": "",
     "gamepad_name": "",
     "display": "",
+    # The GPU by its Vulkan name ("" = the port's choice: a discrete one first).
+    "gpu": "",
     "skip_network_choice": True,
     "fps_mode": "uncap",
     "fps_limit": 0,
@@ -139,15 +195,25 @@ DEFAULTS = {
     "gpu_profile": False,
     "vk_validation": False,
     "extra_env": "",
-    # Online play (Online page, the online module gpu/bbnet): off by default; shadPS4's public
-    # shadNet server and The Hunter's Dream.
+    # Online play (Online page, the online module gpu/bbnet): off by default; Seamless Hunt's
+    # servers (BBSC's: shadNet, its WebAPI and the game server).
     "online": False,
+    # BBSC, Bloodborne seamless co-op (seamlesshunt.com): needs a server running its
+    # game server next to shadNet (Seamless Hunt's does).
+    "online_bbsc": True,
     "online_community": online.COMMUNITY_SERVER,
     "online_server": online.SHADNET_SERVER,
-    "online_webapi": "",
+    "online_webapi": online.WEBAPI_SERVER,
     "online_npid": "",
     "online_password": "",
     "online_upnp": True,
+    # The pool: "seamless" (BBSC, the shadp2p module gpu/bbnet), "shadnet" (shadPS4 0.20's shadNet client,
+    # gpu/bbnet20) or "huntersdream" (The Hunter's Dream, bbhost's protocol, gpu/bbnet20; the account
+    # comes from the Discord sign-in).
+    "online_pool": "seamless",
+    "thd_server": "",
+    "thd_online_id": "",
+    "thd_token": "",
 }
 
 # bbport.ini keys the launcher edits; the rest of the file is kept.
@@ -174,6 +240,11 @@ def load_settings():
         settings.update(json.loads(CONFIG_FILE.read_text(encoding='utf-8')))
     except (OSError, ValueError):
         pass
+    # Addresses saved as the old defaults (shadPS4's public shadNet, which accepts only shadPS4's
+    # own builds since 2026-10-12, and The Hunter's Dream) become the new ones.
+    for key, old_values in online.OLD_DEFAULTS.items():
+        if str(settings.get(key, '')).strip() in old_values:
+            settings[key] = DEFAULTS[key]
     return settings
 
 
@@ -275,9 +346,11 @@ def fsr411_build_command(upscaler, loader=None):
     return command + ([str(loader)] if loader else []), env
 
 
-def online_module():
-    """The online module beside the GPU library (gpu/bbnet; a build without its libraries has none)."""
-    return (PORT_DIR / ("bin" if PACKAGED else "out") / "gpu" / "libbbnet.so").is_file()
+def online_module(pool="seamless"):
+    """The online module beside the GPU library (gpu/bbnet, or gpu/bbnet20 for the shadNet and The
+    Hunter's Dream pools; a build without its libraries has none)."""
+    name = "libbbnet20.so"
+    return (PORT_DIR / ("bin" if PACKAGED else "out") / "gpu" / name).is_file()
 
 
 def game_environment(s):
@@ -316,13 +389,20 @@ def game_environment(s):
         env["BB_FRAME_STATS"] = "1"
     if s.get("save_log"):
         env["BB_SAVE_LOG"] = "1"
-    # The memory model: "auto" is run.sh's choice by GPU (the new one on AMD, the 0.3 one
-    # elsewhere). "pc_model", "pc_memory", "old_memory_model", "new_memory_model" and
+    # The memory model: "auto" is run.sh's choice (the new one on every GPU). "pc_model", "pc_memory", "old_memory_model", "new_memory_model" and
     # "legacy_memory_model" of older settings are ignored (0.5: auto for everyone).
     # BB_PC_MODEL from the shell (or the extra variables) still wins over "auto".
     model = s.get("memory_model", "auto")
     if model in ("new", "old"):
         env["BB_PC_MODEL"] = "1" if model == "new" else "0"
+    # The GPU chosen by name: its index in Vulkan's order now (BB_GPU_ID). One not found (taken
+    # out, renamed by a driver update) leaves the choice to the port. BB_GPU_ID from the shell
+    # wins.
+    if s.get("gpu") and "BB_GPU_ID" not in os.environ:
+        index = next((index for index, _vendor, _kind, name, _best in connected_gpus()
+                      if name == s["gpu"]), None)
+        if index is not None:
+            env["BB_GPU_ID"] = str(index)
     # Synchronisation and memory as released in 0.3 (run.sh: BB_AS_0_3), for comparisons.
     if s.get("as_0_3"):
         env["BB_AS_0_3"] = "1"
@@ -334,7 +414,8 @@ def game_environment(s):
         env["BB_GPU_PROFILE"] = "1"
     if s["vk_validation"]:
         env["BB_VK_VALIDATION"] = "1"
-    if s.get("online") and online_module():
+    pool = "huntersdream" if s.get("online_pool") == "huntersdream" else "seamless"
+    if s.get("online") and online_module(pool):
         server = s["online_server"].strip() or online.SHADNET_SERVER
         community = online.community_address(s["online_community"])
         env["BB_ONLINE"] = "1"
@@ -344,11 +425,35 @@ def game_environment(s):
         env["BB_SHADNET_PASSWORD"] = s["online_password"]
         env["BB_UPNP"] = "1" if s["online_upnp"] else "0"
         env["BB_COMMUNITY_SERVER"] = community
+        env["BB_NET_GEN"] = "20"
+        if pool == "seamless" and s.get("online_bbsc"):
+            env["BB_BBSC"] = "1"
+        if pool == "huntersdream":
+            # run.sh turns these into the backend's addresses and the host overrides.
+            env["BB_NET_BACKEND"] = "thd"
+            env["BB_COMMUNITY_SERVER"] = online.thd_base(s.get("thd_server", ""))
+            env["BB_THD_ONLINE_ID"] = s.get("thd_online_id", "")
+            env["BB_THD_TOKEN"] = s.get("thd_token", "")
     for item in s["extra_env"].split():
         if "=" in item:
             key, value = item.split("=", 1)
             env[key] = value
     return env
+
+
+def open_url(url):
+    """Opens url in the user's browser: GIO, then Python's webbrowser (xdg-open and the like);
+    True when one of them took it."""
+    try:
+        if Gio.AppInfo.launch_default_for_uri(url, None):
+            return True
+    except GLib.Error:
+        pass
+    try:
+        import webbrowser
+        return bool(webbrowser.open(url))
+    except Exception:
+        return False
 
 
 def flat_button(icon, tooltip, handler):
@@ -388,35 +493,38 @@ def combo_value(row):
     return row.values[row.get_selected()]
 
 
-# Controls (runtime_pad.c): input, label, default keyboard keys, default gamepad buttons (SDL names).
+# Controls (runtime_pad.c): input, label, default keyboard keys (Dark Souls III-like; a chord
+# is "Left Shift+Mouse Left"), default gamepad buttons (SDL names).
 # bbport.ini key.<input>= / pad.<input>= replace a default; no line keeps it. Mouse buttons and the
 # wheel are keys ("Mouse Left", "Wheel Down"); they act while the game holds the mouse.
 CONTROLS = [
-    ("cross", "Cross", "Space", "a"),
-    ("circle", "Circle", "Left Shift", "b"),
-    ("square", "Square", "E", "x"),
-    ("triangle", "Triangle", "Q", "y"),
-    ("l1", "L1", "1, Mouse X2", "leftshoulder"),
-    ("r1", "R1", "3, Mouse Left", "rightshoulder"),
-    ("l2", "L2", "R, Mouse Right", "lefttrigger"),
-    ("r2", "R2", "F, Mouse X1", "righttrigger"),
-    ("l3", "L3", "Z", "leftstick"),
-    ("r3", "R3", "C, Mouse Middle", "rightstick"),
-    ("options", "Options", "Return", "start"),
-    ("touchpad", "Touchpad, left half (gestures)", "Tab", "back, touchpad"),
+    ("cross", "Cross (interact)", "F, Return", "a"),
+    ("circle", "Circle (dodge, sprint; keyboard: Space and Shift below)", "", "b"),
+    ("dodge", "Dodge (tap Circle; Shift+Space to jump)", "Space", None),
+    ("sprint", "Sprint (hold Circle)", "Left Shift", None),
+    ("square", "Square (quick item)", "Tab, R", "x"),
+    ("triangle", "Triangle (blood vial)", "Q", "y"),
+    ("l1", "L1 (transform weapon)", "E, Mouse X2", "leftshoulder"),
+    ("r1", "R1 (attack)", "Mouse Left", "rightshoulder"),
+    ("l2", "L2 (shoot)", "Mouse Right", "lefttrigger"),
+    ("r2", "R2 (strong attack)", "Left Shift+Mouse Left, Mouse X1", "righttrigger"),
+    ("l3", "L3", "Left Ctrl", "leftstick"),
+    ("r3", "R3 (lock on)", "C, Mouse Middle", "rightstick"),
+    ("options", "Options (menu; Escape goes back in game menus, like Circle)", "Escape", "start"),
+    ("touchpad", "Touchpad, left half (gestures)", "G", "back, touchpad"),
     ("touchpad_right", "Touchpad, right half (key items)", "Backspace", ""),
-    ("up", "D-pad up", "I, Wheel Up", "dpup"),
-    ("down", "D-pad down", "K, Wheel Down", "dpdown"),
-    ("left", "D-pad left", "J", "dpleft"),
-    ("right", "D-pad right", "L", "dpright"),
+    ("up", "D-pad up", "3, Up, Wheel Up", "dpup"),
+    ("down", "D-pad down", "4, Down, Wheel Down", "dpdown"),
+    ("left", "D-pad left (left-hand weapon)", "1, Left", "dpleft"),
+    ("right", "D-pad right (right-hand weapon)", "2, Right", "dpright"),
     ("move_up", "Move forward", "W", None),
     ("move_down", "Move back", "S", None),
     ("move_left", "Move left", "A", None),
     ("move_right", "Move right", "D", None),
-    ("look_up", "Camera up", "Up", None),
-    ("look_down", "Camera down", "Down", None),
-    ("look_left", "Camera left", "Left", None),
-    ("look_right", "Camera right", "Right", None),
+    ("look_up", "Camera up", "I", None),
+    ("look_down", "Camera down", "K", None),
+    ("look_left", "Camera left", "J", None),
+    ("look_right", "Camera right", "L", None),
 ]
 
 
@@ -431,8 +539,9 @@ def connected_gamepads():
 
 
 def connected_displays():
-    """(BB_DISPLAY value, label) of the monitors (bb-gpu-capabilities --displays), [] if unknown.
-    The value is the monitor's name, or its number when two monitors share a name."""
+    """(BB_DISPLAY value, label, (w, h) or None, primary) of the monitors (bb-gpu-capabilities
+    --displays), [] if unknown. The value is the monitor's name, or its number when two monitors
+    share a name."""
     tool = PORT_DIR / ("bin" if PACKAGED else "out") / "bb-gpu-capabilities"
     try:
         run = subprocess.run([str(tool), "--displays"], capture_output=True, text=True, timeout=5)
@@ -441,8 +550,25 @@ def connected_displays():
     rows = [line.split("\t") for line in run.stdout.splitlines() if line.count("\t") == 2]
     names = [name for name, _, _ in rows]
     return [(name if names.count(name) == 1 else str(number),
-             f"{number}: {name} ({size})" + (", primary" if primary == "1" else ""))
+             f"{number}: {name} ({size})" + (", primary" if primary == "1" else ""),
+             parse_size(size, None), primary == "1")
             for number, (name, size, primary) in enumerate(rows, 1)]
+
+
+
+def connected_gpus():
+    """(index, vendor ID, type, name, the port's own choice) of the GPUs in Vulkan's order
+    (bb-gpu-capabilities --gpus; BB_GPU_ID is the index), [] if unknown."""
+    tool = PORT_DIR / ("bin" if PACKAGED else "out") / "bb-gpu-capabilities"
+    env = {key: value for key, value in os.environ.items() if key != "BB_GPU_ID"}
+    try:
+        run = subprocess.run([str(tool), "--gpus"], capture_output=True, text=True, timeout=10,
+                             env=env)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    rows = [line.split("\t") for line in run.stdout.splitlines() if line.count("\t") == 4]
+    return [(int(index), vendor, kind, name, best == "1")
+            for index, vendor, kind, name, best in rows if index.isdigit()]
 
 
 class FolderList:
@@ -543,15 +669,21 @@ class LauncherWindow(Adw.ApplicationWindow):
                                       self.on_reset_user)
         self.user_row.add_suffix(self.user_reset)
         game.add(self.user_row)
-        self.language_row = combo_row("System language", None, LANGUAGES, self.settings["language"])
+        self.language_row = combo_row("Game language", None, LANGUAGES, self.settings["language"])
         game.add(self.language_row)
         page.add(game)
 
-        # Auto: the new memory model on AMD, the 0.3 one elsewhere; or either by hand.
+        # Auto: the new memory model on every GPU; or either by hand.
         mode = Adw.PreferencesGroup(title="Mode")
         self.memory_model_row = combo_row("Memory and translation model", PC_MODEL_SUBTITLE,
                                           MEMORY_MODELS, self.settings.get("memory_model", "auto"))
         mode.add(self.memory_model_row)
+        # The GPU the game runs on, as in shadPS4 (laptops with two GPUs).
+        self.gpu_row = Adw.ComboRow(title="GPU")
+        self.gpu_row.add_suffix(flat_button("view-refresh-symbolic", "Refresh the list",
+                                            lambda _button: self.fill_gpus()))
+        self.fill_gpus()
+        mode.add(self.gpu_row)
         page.add(mode)
 
         self.mods_group = Adw.PreferencesGroup(
@@ -590,9 +722,14 @@ class LauncherWindow(Adw.ApplicationWindow):
         page.add(self.patches_group)
 
         screen = Adw.PreferencesGroup(title="Display")
-        self.output_row = combo_row("Output resolution",
-                                    "The upscaler fills the frame; Steam Deck: 720p",
-                                    OUTPUT_RES, self.ini.get("output_res", "1920x1080"))
+        # The aspect ratio, then its resolutions (rebuilt when it changes, the height kept).
+        self.aspect_row = Adw.ComboRow(title="Aspect ratio", subtitle=(
+            "Wider than 16:9 shows more to the sides, taller shows more above and below; UI stays at the edges"))
+        self.aspect_row.values = ASPECTS
+        self.output_row = Adw.ComboRow(title="Output resolution",
+                                       subtitle="The upscaler fills the frame; Steam Deck: 1280×800 (16:10)")
+        self.output_row.values = []
+        screen.add(self.aspect_row)
         screen.add(self.output_row)
         self.live_row = combo_row("Live resolution changes",
                                   "No restart needed, but slower on the Steam Deck and older GPUs",
@@ -607,6 +744,12 @@ class LauncherWindow(Adw.ApplicationWindow):
                                                 lambda _button: self.fill_displays()))
         self.fill_displays()
         screen.add(self.display_row)
+        aspect = self.ini.get("aspect_ratio", "auto")
+        self.fill_aspects(aspect if aspect in ASPECTS else "auto")
+        self.fill_outputs(parse_size(self.ini.get("output_res", "1920x1080")))
+        self.aspect_row.connect("notify::selected",
+                                lambda *_: self.fill_outputs(parse_size(combo_value(self.output_row))))
+        self.display_row.connect("notify::selected", lambda *_: self.on_display_changed())
         self.present_row = combo_row("Present mode", None, PRESENT_MODES,
                                      self.settings["present_mode"])
         screen.add(self.present_row)
@@ -642,7 +785,8 @@ class LauncherWindow(Adw.ApplicationWindow):
                 self.control_rows[(kind, name)] = (row, default)
                 self.show_control(kind, name)
             controls.add(expander)
-        # Mouse look (runtime_pad.c): a click in the game takes the mouse, F1 lets it go.
+        # Mouse look (runtime_pad.c): a click in the game takes the mouse, F1 lets it go; the mouse
+        # turns the game camera itself (gpu/shim/bbport_guest_hooks.cpp, BB_NATIVE_MOUSE).
         self.mouse_look_row = Adw.SwitchRow(
             title="Mouse look",
             subtitle="A click in the game window takes the mouse, F1 releases it",
@@ -968,16 +1112,64 @@ class LauncherWindow(Adw.ApplicationWindow):
         self.gamepad_row.set_selected(self.gamepad_row.values.index(current) if current in self.gamepad_row.values else 0)
         self.show_gamepad()
 
+    def monitor_size(self):
+        """The size of the monitor chosen for the game (Auto's aspect ratio), None if unknown."""
+        value = combo_value(self.display_row) if self.display_row.values else ""
+        sizes = getattr(self, "display_sizes", {})
+        return sizes.get(value) or sizes.get("")
+
+    def fill_aspects(self, current):
+        labels = ["Auto" + f" ({resolved_aspect('auto', self.monitor_size())})"] + ASPECTS[1:]
+        self.aspect_row.set_model(Gtk.StringList.new(labels))
+        self.aspect_row.set_selected(ASPECTS.index(current))
+
+    def fill_outputs(self, keep):
+        """The chosen aspect ratio's resolutions; the one of `keep`'s height selected."""
+        sizes = output_sizes(combo_value(self.aspect_row), self.monitor_size())
+        chosen = nearest_output(sizes, keep)
+        self.output_row.values = [f"{w}x{h}" for w, h in sizes]
+        self.output_row.set_model(Gtk.StringList.new(
+            [f"{w}×{h}" + (" (Steam Deck)" if (w, h) == (1280, 800) else "") for w, h in sizes]))
+        self.output_row.set_selected(sizes.index(chosen))
+
+    def on_display_changed(self):
+        aspect, output = combo_value(self.aspect_row), parse_size(combo_value(self.output_row))
+        self.fill_aspects(aspect)
+        self.fill_outputs(output)
+
     def fill_displays(self):
         """The monitor choices: the primary one, the connected ones, and the saved choice while it
         is not connected."""
         current = self.settings.get("display", "")
-        choices = [("Primary", "")] + [(label, value) for value, label in connected_displays()]
+        displays = connected_displays()
+        self.display_sizes = {value: size for value, _label, size, _primary in displays}
+        primary = [size for _value, _label, size, is_primary in displays if is_primary]
+        if primary:
+            self.display_sizes[""] = primary[0]
+        choices = [("Primary", "")] + [(label, value) for value, label, _size, _primary in displays]
         if current and current not in [value for _, value in choices]:
             choices.append(("{} (not connected)".format(current), current))
         self.display_row.set_model(Gtk.StringList.new([label for label, _ in choices]))
         self.display_row.values = [value for _, value in choices]
         self.display_row.set_selected(self.display_row.values.index(current) if current in self.display_row.values else 0)
+
+    def fill_gpus(self):
+        """The GPU choices: the port's own (named), the GPUs found, and the saved one while it is
+        not found."""
+        current = self.settings.get("gpu", "")
+        gpus = connected_gpus()
+        best = [name for _index, _vendor, _kind, name, is_best in gpus if is_best]
+        auto = "Auto" + (f" ({best[0]})" if best else "")
+        choices = [(auto, "")]
+        for _index, _vendor, kind, name, _best in gpus:
+            note = {"integrated": "integrated", "cpu": "software, very slow"}.get(kind)
+            choices.append((f"{name} ({note})" if note else name, name))
+        if current and current not in [value for _, value in choices]:
+            choices.append(("{} (not found)".format(current), current))
+        self.gpu_row.set_model(Gtk.StringList.new([label for label, _ in choices]))
+        self.gpu_row.values = [value for _, value in choices]
+        self.gpu_row.set_selected(self.gpu_row.values.index(current) if current in self.gpu_row.values else 0)
+        self.gpu_row.set_subtitle("On a laptop with two GPUs, choose the discrete one; applies at game startup")
 
     def show_gamepad(self):
         names = getattr(self.gamepad_row, "names", None)
@@ -990,6 +1182,7 @@ class LauncherWindow(Adw.ApplicationWindow):
         s["gamepad"] = combo_value(self.gamepad_row)
         s["gamepad_name"] = self.gamepad_row.names[self.gamepad_row.get_selected()]
         s["display"] = combo_value(self.display_row)
+        s["gpu"] = combo_value(self.gpu_row)
         s["skip_network_choice"] = self.skip_network_row.get_active()
         s["language"] = combo_value(self.language_row)
         s["fullscreen"] = self.fullscreen_row.get_active()
@@ -1011,12 +1204,16 @@ class LauncherWindow(Adw.ApplicationWindow):
         s["extra_env"] = self.extra_row.get_text().strip()
         s["mods_enabled"] = self.mods_enabled_row.get_active()
         s["online"] = self.online_row.get_active()
+        s["online_bbsc"] = self.bbsc_row.get_active()
         s["online_community"] = self.community_row.get_text().strip()
         s["online_server"] = self.server_row.get_text().strip()
         s["online_webapi"] = self.webapi_row.get_text().strip()
         s["online_npid"] = self.npid_row.get_text().strip()
         s["online_password"] = self.password_row.get_text()
         s["online_upnp"] = self.upnp_row.get_active()
+        s["online_pool"] = self.online_pool()
+        s["thd_server"] = self.thd_server_row.get_text().strip()
+        s["thd_online_id"], s["thd_token"] = self.thd_id, self.thd_token
         self.save_mod_profile()
         self.save_patch_profile()
         save_settings(s)
@@ -1027,6 +1224,7 @@ class LauncherWindow(Adw.ApplicationWindow):
             "sharpness": f"{self.sharpness_row.get_value():.2f}",
             "object_motion": "1" if self.motion_row.get_active() else "0",
             "show_fps": "1" if self.show_fps_row.get_active() else "0",
+            "aspect_ratio": combo_value(self.aspect_row),
             "output_res": combo_value(self.output_row),
             "model_lod": combo_value(self.lod_row),
             "live_resolution": combo_value(self.live_row),
@@ -1157,45 +1355,82 @@ class LauncherWindow(Adw.ApplicationWindow):
     def build_online_page(self):
         s = self.settings
         page = Adw.PreferencesPage()
-        play = Adw.PreferencesGroup(description=("Messages, bloodstains and ghosts come from The Hunter's Dream; "
-                                                 "bells and summons go through a shadNet server. Online play works "
-                                                 "together with the Windows version: everyone needs game version "
-                                                 "1.09 and the same server"))
+        play = Adw.PreferencesGroup(description=(
+            "Messages, bloodstains and ghosts come from the game server; bells and summons "
+            "go through a shadNet server. Both default to Seamless Hunt (BBSC's server). "
+            "Online play works with the Windows version: everyone needs game version 1.09 and the same server"))
         self.online_row = Adw.SwitchRow(title="Play online",
                                         subtitle="Off: the game stays offline, as before",
                                         active=s["online"])
         play.add(self.online_row)
         if not online_module():
             self.online_row.set_sensitive(False)
-            self.online_row.set_subtitle("This build has no online module (libbbnet.so): offline play only")
+            self.online_row.set_subtitle("This build has no online module (libbbnet20.so): offline play only")
+        self.pool_row = combo_row("Pool", "Who to play with: everyone in a session needs the same pool", [
+            ("Seamless Hunt (seamlesshunt.com)", "seamless",
+             "BBSC server: seamless co-op, bells and summons; create an account on the website"),
+            ("The Hunter's Dream (thehuntersdream.com)", "huntersdream",
+             "Co-op with bbhost players through The Hunter's Dream; sign in with Discord"),
+        ], "huntersdream" if s.get("online_pool") == "huntersdream" else "seamless")
+        play.add(self.pool_row)
         page.add(play)
 
         game = Adw.PreferencesGroup(title="Game server (messages, bloodstains, ghosts)")
+        self.game_group = game
         self.community_row = Adw.EntryRow(title="Game server", text=s["online_community"])
         game.add(self.community_row)
         page.add(game)
 
+        coop = None
         coop = Adw.PreferencesGroup(
             title="Co-op server (bells and summons)",
-            description=("srv.shadps4.net:31313 is shadPS4's public server. For a private server, enter host:port "
-                         "from the person who runs it. WebAPI: leave it empty to use the server address with port "
-                         "31315"))
+            description=("play.seamlesshunt.com:31313 is the Seamless Hunt (BBSC) server. "
+                         "shadPS4's public server accepts only shadPS4 builds. For a private server, "
+                         "enter host:port from its owner. WebAPI: leave it empty to use the server "
+                         "address with port 31315"))
         self.server_row = Adw.EntryRow(title="Server address", text=s["online_server"])
         self.webapi_row = Adw.EntryRow(title="WebAPI address", text=s["online_webapi"])
         coop.add(self.server_row)
         coop.add(self.webapi_row)
+        self.bbsc_row = Adw.SwitchRow(
+            title="Seamless co-op (BBSC)",
+            subtitle=("Sessions survive deaths, lamps, area changes and bosses; up to 5 hunters. "
+                      "Needs a server running BBSC's game server, enabled by every player"),
+            active=s.get("online_bbsc", False))
+        coop.add(self.bbsc_row)
+        self.coop_group = coop
         page.add(coop)
 
         account = Adw.PreferencesGroup(
             title="Account",
-            description=("Your shadNet account name, not your email. Register at shadnet.shadps4.net or ask the "
-                         "owner of a private server. The password is saved on this computer with the launcher "
-                         "settings"))
+            description=("Your shadNet account name, not your email. Register at seamlesshunt.com "
+                         "or ask the owner of a private server. The password is saved on this computer "
+                         "with the launcher settings"))
         self.npid_row = Adw.EntryRow(title="Online ID (NPID)", text=s["online_npid"])
         self.password_row = Adw.PasswordEntryRow(title="Password", text=s["online_password"])
         account.add(self.npid_row)
         account.add(self.password_row)
+        self.account_group = account
         page.add(account)
+
+        thd = Adw.PreferencesGroup(
+            title="The Hunter's Dream",
+            description=("Sign in through Discord, as in bbhost: confirm a code on the website. No password "
+                         "needed; the token is saved on this computer with the launcher settings"))
+        self.thd_server_row = Adw.EntryRow(title="Server address", text=s.get("thd_server", ""))
+        self.thd_server_row.set_tooltip_text(online.HUNTERS_DREAM_SERVER)
+        thd.add(self.thd_server_row)
+        self.thd_account_row = Adw.ActionRow()
+        self.thd_sign_button = Gtk.Button(valign=Gtk.Align.CENTER)
+        self.thd_sign_button.connect("clicked", self.on_thd_sign)
+        self.thd_account_row.add_suffix(self.thd_sign_button)
+        thd.add(self.thd_account_row)
+        self.thd_group = thd
+        self.thd_id, self.thd_token = s.get("thd_online_id", ""), s.get("thd_token", "")
+        self.thd_signing = False
+        self.thd_cancel = False
+        self.show_thd_account()
+        page.add(thd)
 
         connection = Adw.PreferencesGroup(
             title="Connection",
@@ -1213,7 +1448,96 @@ class LauncherWindow(Adw.ApplicationWindow):
         self.test_rows = []
         self.connection_group = connection
         page.add(connection)
+        self.pool_row.connect("notify::selected", self.on_pool_changed)
+        self.on_pool_changed()
         return page
+
+    def online_pool(self):
+        return combo_value(self.pool_row)
+
+    def on_pool_changed(self, *_):
+        pool = self.online_pool()
+        legacy, thd = pool == "seamless", pool == "huntersdream"
+        self.game_group.set_visible(not thd)
+        self.coop_group.set_visible(not thd)
+        self.account_group.set_visible(not thd)
+        self.bbsc_row.set_visible(legacy)
+        self.thd_group.set_visible(thd)
+        if not online_module(pool):
+            self.pool_row.set_subtitle("This build has no module for this pool (libbbnet20.so)")
+
+    def show_thd_account(self):
+        link = getattr(self, "thd_link", None)
+        if link is not None:
+            self.thd_account_row.remove(link)
+            self.thd_link = None
+        if self.thd_id and self.thd_token:
+            self.thd_account_row.set_title("Signed in as {}".format(GLib.markup_escape_text(self.thd_id)))
+            self.thd_account_row.set_subtitle("")
+            self.thd_sign_button.set_label("Sign out")
+        else:
+            self.thd_account_row.set_title("Not signed in")
+            self.thd_account_row.set_subtitle("A Discord account linked to The Hunter's Dream is required")
+            self.thd_sign_button.set_label("Sign in with Discord")
+        if self.thd_signing:
+            self.thd_sign_button.set_label("Cancel")
+        self.thd_sign_button.set_sensitive(True)
+
+    def on_thd_sign(self, _button):
+        if self.thd_signing:
+            self.thd_cancel = True  # the waiting thread stops; done() resets the row
+            return
+        self.thd_cancel = False
+        if self.thd_id and self.thd_token:
+            self.thd_id = self.thd_token = ""
+            self.show_thd_account()
+            return
+        self.thd_signing = True
+        self.show_thd_account()
+        server = self.thd_server_row.get_text().strip()
+
+        def show_code(page, code):
+            def show():
+                self.thd_account_row.set_title("Sign-in code: {}".format(code))
+                self.thd_account_row.set_subtitle(GLib.markup_escape_text((
+                    "On {}: 1) click “Sign in with Discord to link” and sign in; "
+                    "2) return to the page and enter the code in the code field (not “Sign in with a code from the game”). "
+                    "The code has been copied to the clipboard").format(page)))
+                # The code goes to the clipboard; the page opens by whatever works in this environment
+                # (an AppImage may have no default handler for the GIO call), else a button does it.
+                try:
+                    self.thd_account_row.get_clipboard().set(code)
+                except Exception:
+                    pass
+                if not open_url(page):
+                    link = Gtk.LinkButton(uri=page, label="Open page", valign=Gtk.Align.CENTER)
+                    self.thd_account_row.add_prefix(link)
+                    self.thd_link = link
+                return False
+            GLib.idle_add(show)
+
+        def done(name, token, error):
+            self.thd_signing = False
+            if error:
+                self.show_thd_account()
+                if error != "cancelled":
+                    self.thd_account_row.set_subtitle(GLib.markup_escape_text(error))
+            else:
+                self.thd_id, self.thd_token = name, token
+                self.settings["thd_online_id"], self.settings["thd_token"] = name, token
+                save_settings(self.settings)
+                self.show_thd_account()
+            return False
+
+        def work():
+            try:
+                name, token = online.thd_sign_in(server, show_code, device="bbport on Linux",
+                                                  cancelled=lambda: self.thd_cancel)
+            except ValueError as error:
+                GLib.idle_add(done, "", "", str(error))
+                return
+            GLib.idle_add(done, name, token, "")
+        threading.Thread(target=work, daemon=True).start()
 
     def online_addresses(self):
         server = self.server_row.get_text().strip() or online.SHADNET_SERVER
@@ -1222,6 +1546,9 @@ class LauncherWindow(Adw.ApplicationWindow):
         return server, webapi, community
 
     def on_test_connection(self, _button):
+        if self.online_pool() == "huntersdream":
+            self.test_thd_connection()
+            return
         server, webapi, community = self.online_addresses()
         names = {"game": "Game server", "shadnet": "shadNet server", "webapi": "WebAPI"}
         for row in self.test_rows:
@@ -1247,6 +1574,29 @@ class LauncherWindow(Adw.ApplicationWindow):
             results = online.check(server, webapi, community)
             GLib.idle_add(show, results)
         threading.Thread(target=work, daemon=True).start()
+
+    def test_thd_connection(self):
+        names = {"game": "Game server", "service": "Co-op service"}
+        server = self.thd_server_row.get_text().strip()
+        for row in self.test_rows:
+            self.connection_group.remove(row)
+        self.test_rows = []
+        self.test_button.set_sensitive(False)
+        self.test_button.set_label("Checking…")
+
+        def show(results):
+            for name, address, ok, detail in results:
+                row = Adw.ActionRow(title=GLib.markup_escape_text(f"{names[name]}: {address}"),
+                                    subtitle=GLib.markup_escape_text(
+                                        "reachable" if ok else f"not reachable ({detail})"))
+                row.add_prefix(Gtk.Image(icon_name="object-select-symbolic" if ok else "dialog-warning-symbolic"))
+                self.connection_group.add(row)
+                self.test_rows.append(row)
+            self.test_button.set_sensitive(True)
+            self.test_button.set_label("Test")
+            return False
+
+        threading.Thread(target=lambda: GLib.idle_add(show, online.check_thd(server)), daemon=True).start()
 
     def build_log_page(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
