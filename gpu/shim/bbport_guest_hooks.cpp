@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <mutex>
 #include <sys/mman.h>
 #include <sys/uio.h>
 #include <ucontext.h>
@@ -598,6 +599,198 @@ void PS4_SYSV_ABI ResourceCacheBacking(u64, const Core::GuestRegisterSnapshot* r
     const_cast<Core::GuestRegisterSnapshot*>(r)->rax = reinterpret_cast<u64>(block);
     std::printf("Render resource cache: %u MiB in the port's memory at %p (the game's 160 MiB "
                 "stays allocated)\n", bytes >> 20, block);
+}
+
+/// Screen-space reflections from the startup patch (BbEffectFlags::SsrSupported, SsrAtCopy): a
+/// context set up with SSR keeps it off until its first copy of the scene into Prev HDR, and
+/// never gets it without every target the pass reads. A load builds a new Prev HDR, which the
+/// first SSR frame used to sample unwritten: on about one load in five the scene smeared until
+/// the next load (2026-10-28). BB_SSR_GUARD=0: not installed; BB_SSR_TRACE=1: each setup logged.
+/// Experiments 64, 128 and 256 (BbEffectFlags::SsrHoldOff, SsrUnlit, SsrFreeze) for the smeared
+/// state, live with BB_TOGGLE_FILE (2026-10-29).
+std::mutex ssr_mutex;
+std::array<BbEffectFlags::SsrHistory, 16> ssr_slots{};
+std::size_t ssr_next = 0;
+std::atomic<int> ssr_unprimed{0}; ///< wanted and not yet primed: the copy gate needs the lock
+/// With an experiment to end or a switch to set back (SsrPending): the downsample's and the copy's
+/// gates need the lock, whatever the bits are now.
+std::atomic<int> ssr_pending{0};
+std::atomic<u64> ssr_bits_seen{0}; ///< the experiment bits the copy gate last logged
+/// The experiments whose gates are in (InstallSsrGuard); the others stay off.
+u64 ssr_experiments = 0;
+bool ssr_trace = false;
+
+/// The tracked slot of `context`, or none (under ssr_mutex).
+BbEffectFlags::SsrHistory* SsrSlot(u64 context) {
+    for (auto& s : ssr_slots) {
+        if (s.context == context) {
+            return &s;
+        }
+    }
+    return nullptr;
+}
+
+/// The counters follow a slot changed from `was` (under ssr_mutex). Only the difference is added:
+/// a gate reading them at that moment never sees another slot's state missing.
+void SsrRecount(const BbEffectFlags::SsrHistory& was, const BbEffectFlags::SsrHistory& now) {
+    const int unprimed = int(now.wanted && !now.primed) - int(was.wanted && !was.primed);
+    const int pending = int(BbEffectFlags::SsrPending(now)) - int(BbEffectFlags::SsrPending(was));
+    if (unprimed) {
+        ssr_unprimed.fetch_add(unprimed);
+    }
+    if (pending) {
+        ssr_pending.fetch_add(pending);
+    }
+}
+
+/// One of the steps at a test of +0x2974 (BbEffectFlags::SsrAt*) in r13's context, if tracked: the
+/// game's cmp sees the byte it returns. The slot before and after (both empty: not tracked).
+std::pair<BbEffectFlags::SsrHistory, BbEffectFlags::SsrHistory>
+SsrStep(u64 context, u64 bits, u8 (*step)(BbEffectFlags::SsrHistory*, u64, u8)) {
+    std::scoped_lock lock{ssr_mutex};
+    BbEffectFlags::SsrHistory* slot = SsrSlot(context);
+    if (!slot) {
+        return {};
+    }
+    const BbEffectFlags::SsrHistory was = *slot;
+    auto* ssr = reinterpret_cast<volatile u8*>(context + 0x2974);
+    if (const u8 want = step(slot, bits, *ssr); *ssr != want) {
+        __atomic_store_n(const_cast<u8*>(ssr), want, __ATOMIC_RELAXED);
+    }
+    SsrRecount(was, *slot);
+    return {was, *slot};
+}
+
+/// mov byte [r13 + 0x58], 1: setup's (0x22c39f0) only successful exit, r13 the context.
+void PS4_SYSV_ABI SsrSetupDone(u64, const Core::GuestRegisterSnapshot* r) {
+    const u64 context = r->r13;
+    auto* ssr = reinterpret_cast<volatile u8*>(context + 0x2974);
+    const bool requested = *ssr != 0;
+    const bool supported =
+        requested && BbEffectFlags::SsrSupported({reinterpret_cast<const u8*>(context), 0x29a0});
+    {
+        std::scoped_lock lock{ssr_mutex};
+        BbEffectFlags::SsrHistory* slot = SsrSlot(context);
+        if (!slot && requested) {
+            // The oldest context's, gone or set up long ago.
+            slot = &ssr_slots[ssr_next++ % ssr_slots.size()];
+        }
+        if (slot) {
+            // A new setup also ends its experiments: it builds a new Prev HDR.
+            const BbEffectFlags::SsrHistory was = *slot;
+            *slot = requested ? BbEffectFlags::SsrAfterSetup(context, supported)
+                              : BbEffectFlags::SsrHistory{};
+            SsrRecount(was, *slot);
+        }
+        if (requested) {
+            __atomic_store_n(const_cast<u8*>(ssr), u8(0), __ATOMIC_RELAXED);
+        }
+    }
+    static std::atomic<int> told{0};
+    if (requested && (ssr_trace || (!supported && told.fetch_add(1) < 8))) {
+        u64 caps = 0;
+        std::memcpy(&caps, reinterpret_cast<const void*>(context + 0x48), sizeof(caps));
+        std::printf("Guest hooks: SSR in options %#llx (capabilities %#llx) %s\n",
+                    static_cast<unsigned long long>(context), static_cast<unsigned long long>(caps),
+                    supported ? "from its first written history" : "left off (no SSR targets)");
+    }
+}
+
+/// The experiment bits the SSR gates act on (BB_TOGGLE_FILE's second number).
+u64 SsrExperimentBits() {
+    return __atomic_load_n(&runtime_experiment_bits, __ATOMIC_RELAXED) & ssr_experiments;
+}
+
+/// cmp byte [r13 + 0x2974], 0 at 0x22a37e2: the depth downsample, a frame's first test of the
+/// switch. A copy skipped for experiment 256 cleared it; SSR and the lighting get it back here.
+void PS4_SYSV_ABI SsrDownsampleGate(u64, const Core::GuestRegisterSnapshot* r) {
+    if (ssr_pending.load(std::memory_order_acquire) == 0) {
+        return;
+    }
+    SsrStep(r->r13, SsrExperimentBits(), BbEffectFlags::SsrAtDownsample);
+}
+
+/// cmp byte [r13 + 0x2974], 0 at the lighting's binds of the SSR output (`bind`): 0x22a5466 only
+/// in a context of mode 2, 0x22a7384 also in mode 1, so experiment 128 needs both. After the
+/// first has cleared it the second only looks. The copy gate sets the switch back.
+void PS4_SYSV_ABI SsrLightingGate(u64 bind, const Core::GuestRegisterSnapshot* r) {
+    const u64 bits = SsrExperimentBits();
+    if ((bits & (BbEffectFlags::SsrHoldOff | BbEffectFlags::SsrUnlit)) != BbEffectFlags::SsrUnlit) {
+        return;
+    }
+    const auto [was, now] = SsrStep(r->r13, bits, BbEffectFlags::SsrAtLighting);
+    if (!was.unlit && now.unlit) {
+        std::printf("Guest hooks: SSR in options %#llx lit without its SSR output from %#llx "
+                    "(experiment 128)\n", static_cast<unsigned long long>(r->r13),
+                    static_cast<unsigned long long>(bind));
+    }
+}
+
+/// cmp byte [r13 + 0x2974], 0 at 0x22aa07c: the scene's copy into Prev HDR, after the frame's
+/// SSR. SSR turned on here records this copy and reflects from the next frame on.
+void PS4_SYSV_ABI SsrCopyGate(u64, const Core::GuestRegisterSnapshot* r) {
+    const u64 all = __atomic_load_n(&runtime_experiment_bits, __ATOMIC_RELAXED);
+    if (all != ssr_bits_seen.load(std::memory_order_relaxed)) {
+        if (const u64 was = ssr_bits_seen.exchange(all); was != all) {
+            std::printf("Guest hooks: SSR experiment bits %#llx (were %#llx)\n",
+                        static_cast<unsigned long long>(all), static_cast<unsigned long long>(was));
+        }
+    }
+    const u64 bits = all & ssr_experiments;
+    // Without bits, still the lock for an experiment to end: a frozen history must not be taken
+    // for the next one, nor a switch cleared for the lighting left off.
+    if (!bits && ssr_unprimed.load(std::memory_order_acquire) == 0 &&
+        ssr_pending.load(std::memory_order_acquire) == 0) {
+        return;
+    }
+    const u64 context = r->r13;
+    const auto [was, now] = SsrStep(context, bits, BbEffectFlags::SsrAtCopy);
+    if (!was.wanted) {
+        return;
+    }
+    const unsigned pass = *reinterpret_cast<const std::uint32_t*>(r->rbp - 0xc20);
+    if (was.primed && !now.primed) {
+        std::printf("Guest hooks: SSR in options %#llx held off (experiment 64)\n",
+                    static_cast<unsigned long long>(context));
+    } else if (!was.primed && now.primed && ssr_trace) {
+        std::printf("Guest hooks: SSR in options %#llx on (pass %#x)\n",
+                    static_cast<unsigned long long>(context), pass);
+    }
+    if (!was.frozen && now.frozen) {
+        std::printf("Guest hooks: SSR in options %#llx frozen Prev HDR at pass %#x (experiment 256)\n",
+                    static_cast<unsigned long long>(context), pass);
+    }
+}
+
+bool InstallSsrGuard() {
+    if (const char* env = std::getenv("BB_SSR_GUARD"); env && env[0] == '0') {
+        return false;
+    }
+    // Installed whatever the startup patches: they are applied after the hooks. Without the SSR
+    // patch no setup ends with +0x2974 set (its store at 0x22c4fd0 sets +0x2977 then), so
+    // nothing is tracked and the copy gate returns at once.
+    const char* trace = std::getenv("BB_SSR_TRACE");
+    ssr_trace = trace && trace[0] == '1';
+    constexpr std::array<u8, 5> setup_exit{0x41, 0xc6, 0x45, 0x58, 0x01};
+    // cmp byte [r13 + 0x2974], 0: the same test at the downsample, the lighting and the copy.
+    constexpr std::array<u8, 8> ssr_test{0x41, 0x80, 0xbd, 0x74, 0x29, 0x00, 0x00, 0x00};
+    // The experiments' gates before the copy gate: without their bits they return at once. An
+    // experiment whose gate is missing stays off: 256 without the downsample's would leave SSR
+    // off in every frame, 128 with one lighting bind would still light some contexts with SSR.
+    bool lighting = true;
+    for (const u64 bind : {0x22a5466ull, 0x22a7384ull}) {
+        lighting &= Core::InstallGuestCodeHook(reinterpret_cast<void*>(ImageBase + bind), ssr_test,
+                                               bind, SsrLightingGate);
+    }
+    const bool downsample = Core::InstallGuestCodeHook(reinterpret_cast<void*>(ImageBase + 0x22a37e2),
+                                                       ssr_test, 0, SsrDownsampleGate);
+    ssr_experiments = BbEffectFlags::SsrHoldOff | (lighting ? BbEffectFlags::SsrUnlit : 0) |
+                      (downsample ? BbEffectFlags::SsrFreeze : 0);
+    // The gate first: without it, setup's hook would leave SSR off for good.
+    return Core::InstallGuestCodeHook(reinterpret_cast<void*>(ImageBase + 0x22aa07c), ssr_test, 0,
+                                      SsrCopyGate) &&
+           Core::InstallGuestCodeHook(reinterpret_cast<void*>(ImageBase + 0x22c5370), setup_exit, 0,
+                                      SsrSetupDone);
 }
 
 bool InstallResourceCacheSize() {
@@ -1887,6 +2080,13 @@ void Install(RangeCallback on_gpu_range_allocated) {
                     InstallKernelSampleClamp() ? "on" : "not installed");
         std::printf("Guest hooks: game effects switched live %s\n",
                     InstallHotEffects() ? "on (no restart)" : "off (startup patches)");
+        if (InstallSsrGuard()) {
+            std::printf("Guest hooks: SSR history guard on (experiments 64%s%s)\n",
+                        ssr_experiments & BbEffectFlags::SsrUnlit ? " 128" : "",
+                        ssr_experiments & BbEffectFlags::SsrFreeze ? " 256" : "");
+        } else {
+            std::printf("Guest hooks: SSR history guard off (BB_SSR_GUARD=0 or unmatched code)\n");
+        }
         if (InstallFreeCameraProbe()) {
             std::printf("Guest hooks: free camera probe on (the mouse drives it)\n");
         }
