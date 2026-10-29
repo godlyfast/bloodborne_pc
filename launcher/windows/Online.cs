@@ -16,29 +16,27 @@ namespace BbportLauncher;
 
 public partial class MainWindow
 {
-    private static readonly Dictionary<string, (string Ru, string En)> OnlineTexts = new()
+    private static readonly Dictionary<string, string> OnlineTexts = new()
     {
-        ["thd_signed_in"] = ("Вы вошли как {0}", "Signed in as {0}"),
-        ["thd_signed_out"] = ("Вход не выполнен: нужен аккаунт Discord, привязанный к The Hunter's Dream",
-                              "Not signed in: a Discord account linked to The Hunter's Dream is needed"),
-        ["thd_sign_in"] = ("Войти через Discord", "Sign in with Discord"),
-        ["thd_sign_out"] = ("Выйти", "Sign out"),
-        ["thd_cancel"] = ("Отмена", "Cancel"),
-        ["thd_waiting"] = ("Запрашиваю код входа…", "Asking for a sign-in code…"),
-        ["thd_code"] = ("Код входа: {0}. На открывшейся странице ({1}): 1) нажмите «Sign in with Discord to link» и войдите; 2) вернувшись на страницу, введите код в поле кода (не в «Sign in with a code from the game»). Код скопирован в буфер.",
-                        "Sign-in code: {0}. On the page that opened ({1}): 1) press \"Sign in with Discord to link\" and sign in; 2) back on the page, enter the code in the code field (not \"Sign in with a code from the game\"). The code is on the clipboard."),
-        ["thd_failed"] = ("Вход не удался: {0}", "Sign-in failed: {0}"),
-        ["check"] = ("Проверить", "Check"),
-        ["checking"] = ("Проверка…", "Checking…"),
-        ["reachable"] = ("доступен", "reachable"),
-        ["not_reachable"] = ("недоступен", "not reachable"),
-        ["check_game"] = ("Игровой сервер", "Game server"),
-        ["check_shadnet"] = ("Сервер shadNet", "shadNet server"),
-        ["check_webapi"] = ("WebAPI", "WebAPI"),
-        ["check_service"] = ("Сервис кооператива", "Co-op service"),
+        ["thd_signed_in"] = "Signed in as {0}",
+        ["thd_signed_out"] = "Not signed in: a Discord account linked to The Hunter's Dream is needed",
+        ["thd_sign_in"] = "Sign in with Discord",
+        ["thd_sign_out"] = "Sign out",
+        ["thd_cancel"] = "Cancel",
+        ["thd_waiting"] = "Asking for a sign-in code…",
+        ["thd_code"] = "Sign-in code: {0}. On the page that opened ({1}): 1) press \"Sign in with Discord to link\" and sign in; 2) back on the page, enter the code in the code field (not \"Sign in with a code from the game\"). The code is on the clipboard.",
+        ["thd_failed"] = "Sign-in failed: {0}",
+        ["check"] = "Check",
+        ["checking"] = "Checking…",
+        ["reachable"] = "reachable",
+        ["not_reachable"] = "not reachable",
+        ["check_game"] = "Game server",
+        ["check_shadnet"] = "shadNet server",
+        ["check_webapi"] = "WebAPI",
+        ["check_service"] = "Co-op service",
     };
 
-    private string O(string key) => Translated(key, OnlineTexts[key].Ru, OnlineTexts[key].En);
+    private string O(string key) => OnlineTexts[key];
 
     private Process? onlineTool;
 

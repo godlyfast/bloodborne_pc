@@ -16,7 +16,7 @@
     <!-- ThemeMode (the Fluent theme) is marked experimental in .NET 9. -->
     <NoWarn>WPF0001</NoWarn>
     <InvariantGlobalization>false</InvariantGlobalization>
-    <SatelliteResourceLanguages>en;ru</SatelliteResourceLanguages>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="../settings_schema.json" LogicalName="settings_schema.json" />

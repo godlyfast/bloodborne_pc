@@ -19,19 +19,18 @@ namespace BbportLauncher;
 
 public partial class MainWindow
 {
-    private static readonly Dictionary<string, (string Ru, string En)> ModTexts = new()
+    private static readonly Dictionary<string, string> ModTexts = new()
     {
-        ["open"] = ("Открыть", "Open"),
-        ["refresh"] = ("Обновить", "Refresh"),
-        ["no_mods"] = ("Модов нет: распакуйте каждый мод в отдельную папку здесь.",
-                       "No mods: unpack each mod into its own folder here."),
-        ["no_patches"] = ("Патчей нет: положите сюда XML-патчи shadPS4.", "No patches: put shadPS4 XML patches here."),
-        ["earlier"] = ("Загрузить раньше", "Load earlier"),
-        ["later"] = ("Загрузить позже", "Load later"),
-        ["author"] = ("Автор: {0}", "Author: {0}"),
+        ["open"] = "Open",
+        ["refresh"] = "Refresh",
+        ["no_mods"] = "No mods: unpack each mod into its own folder here.",
+        ["no_patches"] = "No patches: put shadPS4 XML patches here.",
+        ["earlier"] = "Load earlier",
+        ["later"] = "Load later",
+        ["author"] = "Author: {0}",
     };
 
-    private string M(string key) => Translated(key, ModTexts[key].Ru, ModTexts[key].En);
+    private string M(string key) => ModTexts[key];
 
     // The game's top-level folders and the retail serials (scripts/mods.py GAME_FOLDERS, SERIALS).
     private static readonly HashSet<string> GameFolders = new(StringComparer.OrdinalIgnoreCase)

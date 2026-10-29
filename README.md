@@ -33,9 +33,11 @@ This fork of [deadinside28/bloodborne_pc](https://github.com/deadinside28/bloodb
 is based on upstream **0.7**, commit `0fc2921c45f8ff3900f6bfa43a299e9a4f532af4`,
 merged without rewriting the fork's history (0.6, `8185b88`, was merged the same
 way). Upstream's renderer, single memory model, hooks layout (`gpu/games/bloodborne/`),
-online module, trophies, upscalers and fixes are retained. The Linux launcher,
-overlay and port-owned game-menu text are English-only, independent of the system
-locale: there is no translation module and no launcher or menu language setting.
+online module, trophies, upscalers and fixes are retained. The Linux and Windows
+launchers, the overlay and the port-owned game-menu text are English-only,
+independent of the system locale: there is no translation module and no launcher
+or menu language setting. The Windows WPF launcher and its runner were edited for
+this but are not built or tested by the fork (that needs dotnet-sdk 9 and Wine).
 Duplicate Russian documentation is removed and unique technical notes are
 translated. This does **not** restrict the original game's 21 language choices
 or its text and voice language selectors, which keep English labels.
@@ -571,8 +573,8 @@ holding L3+R3) opens the port's menu in the game. Everything the port writes sta
 log per run: for a report send the newest one). `Bloodborne.exe --play` starts the game without
 the launcher window (through `bbport-run.exe`).
 
-**Launcher:** WPF in the Windows 11 style, following the system's light or dark theme, in five
-languages; the same settings as on Linux (sections with descriptions), monitor, controller and
+**Launcher:** WPF in the Windows 11 style, following the system's light or dark theme, in
+English (this fork); the same settings as on Linux (sections with descriptions), monitor, controller and
 GPU choice, the log of the running game, *Stop*.
 
 **Upscalers:** FSR 3.1 and FSR 4 as on Linux. FSR 4.1.1: choose *Build from an AMD DLL…* and pick

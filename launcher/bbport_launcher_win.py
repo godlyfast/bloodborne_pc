@@ -33,39 +33,39 @@ INI_FILE = DATA_DIR / 'bbport.ini'
 MAX_LOG_LINES = 5000
 
 # The lists of launcher/bbport_launcher.py (the Linux launcher; GTK is not used here).
-UPSCALERS = [('FSR 4', 'fsr4'), ('FSR 3', 'fsr3'), ('TAA (нативное сглаживание)', 'taa'), ('Выключен', 'off')]
+UPSCALERS = [('FSR 4', 'fsr4'), ('FSR 3', 'fsr3'), ('TAA (native anti-aliasing)', 'taa'), ('Off', 'off')]
 PRESETS = [('Native AA', '0'), ('Quality (x1.5)', '1'), ('Balanced (x1.7)', '2'),
            ('Performance (x2)', '3'), ('Ultra Performance (x3)', '4')]
 OUTPUTS = ['1280x720', '1600x900', '1920x1080', '2560x1440', '3840x2160', '1920x1200', '2560x1600',
            '2560x1080', '3440x1440', '5120x1440']
-FPS_MODES = [('Без ограничения', 'uncap'), ('60', '60'), ('90', '90'), ('30 (как на PS4)', '30')]
+FPS_MODES = [('Unlocked', 'uncap'), ('60', '60'), ('90', '90'), ('30 (as on PS4)', '30')]
 PRESENT_MODES = [('Mailbox', 'Mailbox'), ('FIFO (VSync)', 'Fifo'), ('FIFO Relaxed', 'FifoRelaxed'),
                  ('Immediate', 'Immediate')]
-LANGUAGES = [('Английский', '1'), ('Английский (Великобритания)', '18'), ('Русский', '8'),
-             ('Японский', '0'), ('Французский', '2'), ('Испанский', '3'),
-             ('Испанский (Латинская Америка)', '20'), ('Немецкий', '4'), ('Итальянский', '5'),
-             ('Нидерландский', '6'), ('Португальский', '7'), ('Португальский (Бразилия)', '17'),
-             ('Польский', '16'), ('Турецкий', '19'), ('Корейский', '9'),
-             ('Китайский (упрощённый)', '11'), ('Китайский (традиционный)', '10'),
-             ('Финский', '12'), ('Шведский', '13'), ('Датский', '14'), ('Норвежский', '15')]
+LANGUAGES = [('English', '1'), ('English (UK)', '18'), ('Russian', '8'),
+             ('Japanese', '0'), ('French', '2'), ('Spanish', '3'),
+             ('Spanish (Latin America)', '20'), ('German', '4'), ('Italian', '5'),
+             ('Dutch', '6'), ('Portuguese', '7'), ('Portuguese (Brazil)', '17'),
+             ('Polish', '16'), ('Turkish', '19'), ('Korean', '9'),
+             ('Chinese (Simplified)', '11'), ('Chinese (Traditional)', '10'),
+             ('Finnish', '12'), ('Swedish', '13'), ('Danish', '14'), ('Norwegian', '15')]
 EFFECTS = [
-    ('effect_chromatic_aberration', 'Хроматическая аберрация', True),
-    ('effect_dof', 'Глубина резкости (DoF)', True),
-    ('effect_motion_blur', 'Размытие в движении', True),
-    ('effect_ssao', 'Затенение SSAO', True),
-    ('effect_dynamic_shadows', 'Тени от динамических источников', True),
-    ('effect_ssr', 'Отражения SSR (не было в игре)', False),
-    ('effect_bloom', 'Свечение (Bloom)', True),
-    ('skip_intro', 'Пропуск заставок при запуске', False),
+    ('effect_chromatic_aberration', 'Chromatic aberration', True),
+    ('effect_dof', 'Depth of field (DoF)', True),
+    ('effect_motion_blur', 'Motion blur', True),
+    ('effect_ssao', 'SSAO', True),
+    ('effect_dynamic_shadows', 'Dynamic light shadows', True),
+    ('effect_ssr', 'SSR reflections (not in the original game)', False),
+    ('effect_bloom', 'Bloom', True),
+    ('skip_intro', 'Skip the intro videos', False),
 ]
-ANTI_ALIASING = [('Авто (игры без апскейлера)', 'auto'), ('Собственное игры', 'game'),
-                 ('FXAA2_GS (игры)', 'fxaa'), ('SMAA (без апскейлера)', 'smaa'), ('Выкл', 'off')]
+ANTI_ALIASING = [('Auto (the game\'s without an upscaler)', 'auto'), ('The game\'s own', 'game'),
+                 ('FXAA2_GS (the game\'s)', 'fxaa'), ('SMAA (without an upscaler)', 'smaa'), ('Off', 'off')]
 # bbport.ini texture_quality: large textures in VRAM at full, half or a quarter size.
-TEXTURE_QUALITY = [('Авто (половина при 3 ГБ видеопамяти и меньше)', 'auto'), ('Полное', 'full'),
-                   ('Половина', 'half'), ('Четверть', 'quarter')]
+TEXTURE_QUALITY = [('Auto (half with 3 GB of VRAM or less)', 'auto'), ('Full', 'full'),
+                   ('Half', 'half'), ('Quarter', 'quarter')]
 # bbport.ini low_latency: NVIDIA Reflex, or AMD Anti-Lag 2 (AMD's driver); Boost is Reflex's.
-LOW_LATENCIES = [('Включена', 'on'), ('Включена + Boost (NVIDIA)', 'boost'), ('Выключена', 'off')]
-MODEL_LOD = [('Как в игре', '0'), ('Максимальная (-2)', '-2'), ('Ниже (1)', '1'), ('Минимальная (2)', '2')]
+LOW_LATENCIES = [('On', 'on'), ('On + Boost (NVIDIA)', 'boost'), ('Off', 'off')]
+MODEL_LOD = [('As in the game', '0'), ('Highest (-2)', '-2'), ('Lower (1)', '1'), ('Lowest (2)', '2')]
 
 DEFAULTS = {
     'game_dir': '',
@@ -249,49 +249,49 @@ def main_window():
 
     # Game
     game = ttk.Frame(notebook)
-    notebook.add(game, text='Игра')
+    notebook.add(game, text='Game')
     game_var = tk.StringVar(value=settings['game_dir'])
     folder = ttk.Frame(game)
     ttk.Entry(folder, textvariable=game_var).pack(side='left', fill='x', expand=True)
-    ttk.Button(folder, text='Выбрать…', command=lambda: game_var.set(
-        filedialog.askdirectory(title='Папка игры (с eboot.bin)') or game_var.get())).pack(side='left', padx=4)
-    row(game, 0, 'Папка игры (CUSA03173, с eboot.bin)', folder)
+    ttk.Button(folder, text='Choose…', command=lambda: game_var.set(
+        filedialog.askdirectory(title='Game folder (with eboot.bin)') or game_var.get())).pack(side='left', padx=4)
+    row(game, 0, 'Game folder (CUSA03173, with eboot.bin)', folder)
     variables['game_dir'] = ('s', game_var.get)
-    combo(game, 1, 'Язык игры', LANGUAGES, settings['language'], 'language', 's')
-    check(game, 2, 'Пропускать выбор «онлайн / оффлайн»', settings['skip_network_choice'], 'skip_network_choice', 's')
-    entry(game, 3, 'Папка сохранений (пусто: user рядом с игрой)', settings['user_dir'], 'user_dir', 's')
+    combo(game, 1, 'Game language', LANGUAGES, settings['language'], 'language', 's')
+    check(game, 2, 'Skip the online / offline choice', settings['skip_network_choice'], 'skip_network_choice', 's')
+    entry(game, 3, 'Saves folder (empty: user next to the game)', settings['user_dir'], 'user_dir', 's')
 
     # Graphics
     gfx = ttk.Frame(notebook)
-    notebook.add(gfx, text='Графика')
-    combo(gfx, 0, 'Апскейлер', UPSCALERS, ini['upscaler'], 'upscaler', 'i')
-    combo(gfx, 1, 'Пресет', PRESETS, ini['preset'], 'preset', 'i')
-    combo(gfx, 2, 'Разрешение вывода', [('Авто (монитор)', 'auto')] + [(o, o) for o in OUTPUTS] +
+    notebook.add(gfx, text='Graphics')
+    combo(gfx, 0, 'Upscaler', UPSCALERS, ini['upscaler'], 'upscaler', 'i')
+    combo(gfx, 1, 'Preset', PRESETS, ini['preset'], 'preset', 'i')
+    combo(gfx, 2, 'Output resolution', [('Auto (monitor)', 'auto')] + [(o, o) for o in OUTPUTS] +
           ([(ini['output_res'], ini['output_res'])] if ini['output_res'] not in OUTPUTS + ['auto'] else []),
           ini['output_res'], 'output_res', 'i')
-    combo(gfx, 3, 'Частота кадров', FPS_MODES, settings['fps_mode'], 'fps_mode', 's')
-    entry(gfx, 4, 'Ограничение FPS (0: нет)', settings['fps_limit'], 'fps_limit', 's')
-    combo(gfx, 5, 'Режим показа кадров', PRESENT_MODES, settings['present_mode'], 'present_mode', 's')
-    check(gfx, 6, 'Полный экран', settings['fullscreen'], 'fullscreen', 's')
-    combo(gfx, 7, 'Детализация моделей', MODEL_LOD, ini['model_lod'], 'model_lod', 'i')
-    combo(gfx, 8, 'Низкая задержка (NVIDIA Reflex / AMD Anti-Lag 2)', LOW_LATENCIES,
+    combo(gfx, 3, 'Frame rate', FPS_MODES, settings['fps_mode'], 'fps_mode', 's')
+    entry(gfx, 4, 'FPS limit (0: none)', settings['fps_limit'], 'fps_limit', 's')
+    combo(gfx, 5, 'Present mode', PRESENT_MODES, settings['present_mode'], 'present_mode', 's')
+    check(gfx, 6, 'Fullscreen', settings['fullscreen'], 'fullscreen', 's')
+    combo(gfx, 7, 'Model detail', MODEL_LOD, ini['model_lod'], 'model_lod', 'i')
+    combo(gfx, 8, 'Low latency (NVIDIA Reflex / AMD Anti-Lag 2)', LOW_LATENCIES,
           ini['low_latency'], 'low_latency', 'i')
-    combo(gfx, 9, 'Сглаживание', ANTI_ALIASING, ini['anti_aliasing'], 'anti_aliasing', 'i')
-    combo(gfx, 10, 'Качество текстур', TEXTURE_QUALITY, ini['texture_quality'], 'texture_quality', 'i')
+    combo(gfx, 9, 'Anti-aliasing', ANTI_ALIASING, ini['anti_aliasing'], 'anti_aliasing', 'i')
+    combo(gfx, 10, 'Texture quality', TEXTURE_QUALITY, ini['texture_quality'], 'texture_quality', 'i')
 
     # Effects
     fx = ttk.Frame(notebook)
-    notebook.add(fx, text='Эффекты')
+    notebook.add(fx, text='Effects')
     for i, (key, title, _default) in enumerate(EFFECTS):
         check(fx, i, title, ini.get(key) == '1', key, 'ib')
 
     # Advanced
     adv = ttk.Frame(notebook)
-    notebook.add(adv, text='Дополнительно')
-    entry(adv, 0, 'Видеокарта (номер в Vulkan, пусто: авто)', settings['gpu_id'], 'gpu_id', 's')
-    check(adv, 1, 'Статистика кадров в журнале (logs\\*.frames.csv)', settings['save_log'], 'save_log', 's')
-    entry(adv, 2, 'Переменные окружения (KEY=VALUE через пробел)', settings['extra_env'], 'extra_env', 's')
-    ttk.Label(adv, text=f'Данные порта: {DATA_DIR}\nНастройки лаунчера: {CONFIG_FILE}',
+    notebook.add(adv, text='Advanced')
+    entry(adv, 0, 'GPU (Vulkan index, empty: auto)', settings['gpu_id'], 'gpu_id', 's')
+    check(adv, 1, 'Frame statistics in the log (logs\\*.frames.csv)', settings['save_log'], 'save_log', 's')
+    entry(adv, 2, 'Environment variables (KEY=VALUE, space-separated)', settings['extra_env'], 'extra_env', 's')
+    ttk.Label(adv, text=f'Port data: {DATA_DIR}\nLauncher settings: {CONFIG_FILE}',
               foreground='gray').grid(row=3, column=0, columnspan=2, sticky='w', padx=6, pady=8)
 
     log = tk.Text(root, height=20, wrap='none', state='disabled', font=('Consolas', 9))
@@ -342,7 +342,7 @@ def main_window():
     def start():
         collect()
         if not (Path(settings['game_dir']) / 'eboot.bin').is_file():
-            messagebox.showerror('Bloodborne', 'В выбранной папке нет eboot.bin: выберите папку игры (CUSA03173).')
+            messagebox.showerror('Bloodborne', 'The chosen folder has no eboot.bin: choose the game folder (CUSA03173).')
             return
         play_button.configure(state='disabled')
 
@@ -367,10 +367,10 @@ def main_window():
         (DATA_DIR / 'logs').mkdir(exist_ok=True)
         os.startfile(str(DATA_DIR / 'logs'))  # noqa: S606 (Windows)
 
-    play_button = ttk.Button(buttons, text='ИГРАТЬ', command=start)
+    play_button = ttk.Button(buttons, text='PLAY', command=start)
     play_button.pack(side='right')
-    ttk.Button(buttons, text='Сохранить', command=collect).pack(side='right', padx=6)
-    ttk.Button(buttons, text='Журналы', command=open_logs).pack(side='left')
+    ttk.Button(buttons, text='Save', command=collect).pack(side='right', padx=6)
+    ttk.Button(buttons, text='Logs', command=open_logs).pack(side='left')
     root.after(100, pump)
     root.protocol('WM_DELETE_WINDOW', lambda: (collect(), root.destroy()))
     root.mainloop()

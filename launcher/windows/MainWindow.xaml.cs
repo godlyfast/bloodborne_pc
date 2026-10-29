@@ -18,7 +18,6 @@ namespace BbportLauncher;
 public partial class MainWindow : Window
 {
     private readonly Store store = new();
-    private string language = "ru";
     private Process? game;
     private readonly StringBuilder log = new();
     private List<(string Index, string Name, bool Best)>? gpus;
@@ -34,70 +33,58 @@ public partial class MainWindow : Window
         ["log"] = "", ["trophies"] = "\uE734", ["online"] = "\uE774",
     };
 
-    private static readonly Dictionary<string, (string Ru, string En)> Texts = new()
+    private static readonly Dictionary<string, string> Texts = new()
     {
-        ["play"] = ("Играть", "Play"),
-        ["stop"] = ("Остановить", "Stop"),
-        ["log"] = ("Журнал", "Log"),
-        ["log_description"] = ("Вывод последнего запуска. Полные журналы — в папке logs.",
-                               "The output of the last run. Full logs are in the logs folder."),
-        ["open_logs"] = ("Открыть папку журналов", "Open the logs folder"),
-        ["copy_log"] = ("Скопировать", "Copy"),
-        ["browse"] = ("Обзор…", "Browse…"),
-        ["reset"] = ("По умолчанию", "Default"),
-        ["auto"] = ("Авто", "Auto"),
-        ["system"] = ("Как в системе", "As the system"),
-        ["auto_monitor"] = ("Авто (как у монитора)", "Auto (the monitor's)"),
-        ["auto_gpu"] = ("Авто (дискретная)", "Auto (the discrete one)"),
-        ["default_user"] = ("По умолчанию: {0}", "Default: {0}"),
-        ["files_dlss"] = ("DLSS: библиотеки NVIDIA", "DLSS: NVIDIA libraries"),
-        ["files_dlss_description"] = ("nvngx_dlss.dll (апскейлер) и nvngx_dlssg.dll (генерация кадров, RTX 40/50). В сборке с DLSS они уже есть; свои (из любой игры с DLSS) копируются в user\\dlss и берутся раньше встроенных. Нужна GeForce RTX.",
-                                      "nvngx_dlss.dll (upscaler) and nvngx_dlssg.dll (frame generation, RTX 40/50). A DLSS build brings them; your own (from any game with DLSS) are copied to user\\dlss and preferred. Needs a GeForce RTX."),
-        ["files_fsr4"] = ("FSR 4: ассеты модели", "FSR 4: model assets"),
-        ["files_fsr4_description"] = ("Модель FSR 4 v07 (INT8; MIT, собрана из исходников AMD) входит в сборку.",
-                                      "The FSR 4 v07 model (INT8; MIT, built from AMD's source) comes with the build."),
-        ["fsr4_found"] = ("Ассеты найдены.", "The assets are found."),
-        ["fsr4_missing"] = ("Нет папки fsr4_shaders рядом с лаунчером: распакуйте архив порта целиком. Игра включит FSR 3.1.",
-                            "No fsr4_shaders folder next to the launcher: unpack the whole archive. The game falls back to FSR 3.1."),
-        ["files_fsr411"] = ("FSR 4.1.1: ассеты из своей DLL AMD", "FSR 4.1.1: assets from your AMD DLL"),
-        ["files_fsr411_description"] = ("Порт не распространяет файлы AMD. «Собрать из DLL AMD…» делает набор из вашей amd_fidelityfx_upscaler_dx12.dll 4.1.x (с amdxcffx64.dll драйвера — ещё модели FSR 4.1.2); можно и выбрать готовую папку fsr4_411.",
-                                        "The port ships nothing of AMD's. \"Build from an AMD DLL…\" makes the set from your amd_fidelityfx_upscaler_dx12.dll 4.1.x (with the driver's amdxcffx64.dll, FSR 4.1.2's models too); you can also choose a built fsr4_411 folder."),
-        ["fsr411_found"] = ("Набор есть: {0}", "The set is there: {0}"),
-        ["fsr411_missing"] = ("Набора нет: игра включит FSR 4 (или FSR 3.1).", "No set: the game falls back to FSR 4 (or FSR 3.1)."),
-        ["fsr411_bad"] = ("В выбранной папке нет файлов набора FSR 4.1.1.", "The chosen folder has no FSR 4.1.1 set."),
-        ["fsr411_build"] = ("Собрать из DLL AMD…", "Build from an AMD DLL…"),
-        ["fsr411_build_title"] = ("amd_fidelityfx_upscaler_dx12.dll 4.1.x (и, для моделей FSR 4.1.2, amdxcffx64.dll драйвера)",
-                                  "amd_fidelityfx_upscaler_dx12.dll 4.1.x (and, for FSR 4.1.2's models, the driver's amdxcffx64.dll)"),
-        ["fsr411_building"] = ("Идёт сборка (минута-две): ход в журнале.", "Building (a minute or two): progress in the log."),
-        ["fsr411_build_done"] = ("Набор FSR 4.1.1 собран.", "The FSR 4.1.1 set is built."),
-        ["fsr411_build_failed"] = ("Сборка не удалась (код {0}): подробности в журнале.", "The build failed (code {0}): details in the log."),
-        ["files_choose"] = ("Выбрать файлы…", "Choose files…"),
-        ["files_choose_folder"] = ("Выбрать папку…", "Choose a folder…"),
-        ["files_remove"] = ("Убрать выбранные", "Remove chosen"),
-        ["files_chosen"] = ("выбранные", "chosen"),
-        ["files_bundled"] = ("из сборки", "bundled"),
-        ["dlss_none"] = ("Нет: DLSS недоступен (выберите nvngx_dlss.dll из игры с DLSS).",
-                         "None: DLSS is unavailable (choose nvngx_dlss.dll from a game with DLSS)."),
-        ["dlss_no_bridge"] = ("В этой сборке нет моста DLSS (bin\\bbport_dlss.dll): DLSS недоступен.",
-                              "This build has no DLSS bridge (bin\\bbport_dlss.dll): DLSS is unavailable."),
-        ["dlss_bad"] = ("Нужны файлы nvngx_dlss.dll и/или nvngx_dlssg.dll.",
-                        "Choose nvngx_dlss.dll and/or nvngx_dlssg.dll."),
-        ["no_game"] = ("Выберите папку игры (CUSA03173) в разделе «Игра».",
-                       "Choose the game folder (CUSA03173) in the Game section."),
-        ["bad_game"] = ("В папке игры нет eboot.bin.", "The game folder has no eboot.bin."),
-        ["game_ok"] = ("Игра найдена.", "The game is found."),
-        ["no_runner"] = ("Нет bbport-run.exe рядом с лаунчером: распакуйте архив порта целиком.",
-                         "No bbport-run.exe next to the launcher: unpack the whole port archive."),
-        ["fg_off"] = ("Выключена", "Off"),
-        ["fg_fsr3"] = ("FSR 3.1 (экспериментально)", "FSR 3.1 (experimental)"),
-        ["fg_dlss2"] = ("DLSS 2x (NVIDIA RTX 40/50)", "DLSS 2x (NVIDIA RTX 40/50)"),
-        ["fg_dlss3"] = ("DLSS 3x (NVIDIA RTX 50)", "DLSS 3x (NVIDIA RTX 50)"),
-        ["fg_dlss4"] = ("DLSS 4x (NVIDIA RTX 50)", "DLSS 4x (NVIDIA RTX 50)"),
-        ["exited"] = ("Игра завершилась, код {0}.", "The game exited, code {0}."),
-        ["primary"] = ("Основной", "Primary"),
-        ["is_primary"] = (", основной", ", primary"),
-        ["first_pad"] = ("Авто (первый подключённый)", "Auto (the first connected)"),
-        ["not_connected"] = ("{0} (не подключён)", "{0} (not connected)"),
+        ["play"] = "Play",
+        ["stop"] = "Stop",
+        ["log"] = "Log",
+        ["log_description"] = "The output of the last run. Full logs are in the logs folder.",
+        ["open_logs"] = "Open the logs folder",
+        ["copy_log"] = "Copy",
+        ["browse"] = "Browse…",
+        ["reset"] = "Default",
+        ["auto"] = "Auto",
+        ["auto_monitor"] = "Auto (the monitor's)",
+        ["auto_gpu"] = "Auto (the discrete one)",
+        ["default_user"] = "Default: {0}",
+        ["files_dlss"] = "DLSS: NVIDIA libraries",
+        ["files_dlss_description"] = "nvngx_dlss.dll (upscaler) and nvngx_dlssg.dll (frame generation, RTX 40/50). A DLSS build brings them; your own (from any game with DLSS) are copied to user\\dlss and preferred. Needs a GeForce RTX.",
+        ["files_fsr4"] = "FSR 4: model assets",
+        ["files_fsr4_description"] = "The FSR 4 v07 model (INT8; MIT, built from AMD's source) comes with the build.",
+        ["fsr4_found"] = "The assets are found.",
+        ["fsr4_missing"] = "No fsr4_shaders folder next to the launcher: unpack the whole archive. The game falls back to FSR 3.1.",
+        ["files_fsr411"] = "FSR 4.1.1: assets from your AMD DLL",
+        ["files_fsr411_description"] = "The port ships nothing of AMD's. \"Build from an AMD DLL…\" makes the set from your amd_fidelityfx_upscaler_dx12.dll 4.1.x (with the driver's amdxcffx64.dll, FSR 4.1.2's models too); you can also choose a built fsr4_411 folder.",
+        ["fsr411_found"] = "The set is there: {0}",
+        ["fsr411_missing"] = "No set: the game falls back to FSR 4 (or FSR 3.1).",
+        ["fsr411_bad"] = "The chosen folder has no FSR 4.1.1 set.",
+        ["fsr411_build"] = "Build from an AMD DLL…",
+        ["fsr411_build_title"] = "amd_fidelityfx_upscaler_dx12.dll 4.1.x (and, for FSR 4.1.2's models, the driver's amdxcffx64.dll)",
+        ["fsr411_building"] = "Building (a minute or two): progress in the log.",
+        ["fsr411_build_done"] = "The FSR 4.1.1 set is built.",
+        ["fsr411_build_failed"] = "The build failed (code {0}): details in the log.",
+        ["files_choose"] = "Choose files…",
+        ["files_choose_folder"] = "Choose a folder…",
+        ["files_remove"] = "Remove chosen",
+        ["files_chosen"] = "chosen",
+        ["files_bundled"] = "bundled",
+        ["dlss_none"] = "None: DLSS is unavailable (choose nvngx_dlss.dll from a game with DLSS).",
+        ["dlss_no_bridge"] = "This build has no DLSS bridge (bin\\bbport_dlss.dll): DLSS is unavailable.",
+        ["dlss_bad"] = "Choose nvngx_dlss.dll and/or nvngx_dlssg.dll.",
+        ["no_game"] = "Choose the game folder (CUSA03173) in the Game section.",
+        ["bad_game"] = "The game folder has no eboot.bin.",
+        ["game_ok"] = "The game is found.",
+        ["no_runner"] = "No bbport-run.exe next to the launcher: unpack the whole port archive.",
+        ["fg_off"] = "Off",
+        ["fg_fsr3"] = "FSR 3.1 (experimental)",
+        ["fg_dlss2"] = "DLSS 2x (NVIDIA RTX 40/50)",
+        ["fg_dlss3"] = "DLSS 3x (NVIDIA RTX 50)",
+        ["fg_dlss4"] = "DLSS 4x (NVIDIA RTX 50)",
+        ["exited"] = "The game exited, code {0}.",
+        ["primary"] = "Primary",
+        ["is_primary"] = ", primary",
+        ["first_pad"] = "Auto (the first connected)",
+        ["not_connected"] = "{0} (not connected)",
     };
 
     public MainWindow()
@@ -105,7 +92,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         var version = Path.Combine(Store.PackageDir, "VERSION");
         VersionText.Text = File.Exists(version) ? "bbport " + File.ReadAllText(version).Trim() : "bbport";
-        ApplyLanguage();
+        BuildSections();
         Closing += (_, _) => store.Save();
         SourceInitialized += (_, _) => DarkTitleBar();
     }
@@ -127,34 +114,14 @@ public partial class MainWindow : Window
             DwmSetWindowAttribute(handle, 19, ref on, sizeof(int));
     }
 
-    private string T(string key) => Translated(key, Texts[key].Ru, Texts[key].En);
+    private string T(string key) => Texts[key];
 
-    /// A text in the launcher language: Russian and English from the tables, the other languages
-    /// from ExtraTexts (Translations.cs), English where a text has no translation yet.
-    private string Translated(string key, string ru, string en) =>
-        language == "ru" ? ru
-        : language != "en" && ExtraTexts.TryGetValue(language, out var table) && table.TryGetValue(key, out var text) ? text
-        : en;
+    /// A schema text ({"en": ...}): the launcher is English-only.
+    private string S(JsonNode? texts) => (string?)texts?["en"] ?? "";
 
-    /// The launcher languages: those of the Linux launcher (bbport_i18n.py).
-    private static readonly string[] Languages = { "ru", "en", "pt_BR", "zh_CN", "fr_FR" };
-
-    /// A schema text ({"ru": ..., "en": ...}) in the launcher language.
-    private string S(JsonNode? texts) =>
-        (string?)texts?[language] ?? (string?)texts?["en"] ?? (string?)texts?["ru"] ?? "";
-
-    private void ApplyLanguage()
+    /// The sidebar's sections and the window's texts.
+    private void BuildSections()
     {
-        var choice = store.Get("ui_language");
-        language = Languages.Contains(choice) ? choice
-            : CultureInfo.CurrentUICulture.TwoLetterISOLanguageName switch
-            {
-                "ru" => "ru",
-                "pt" => "pt_BR",
-                "zh" => "zh_CN",
-                "fr" => "fr_FR",
-                _ => "en",
-            };
         var selected = (Sections.SelectedItem as ListBoxItem)?.Tag as string
                        ?? Environment.GetEnvironmentVariable("BB_LAUNCHER_SECTION") ?? "game";
         Sections.Items.Clear();
@@ -384,7 +351,7 @@ public partial class MainWindow : Window
         var list = item["choices"] as JsonArray
                    ?? store.Schema["lists"]![(string)item["choices_ref"]!]!.AsArray();
         return list.Select(c => c!.AsObject()).Select(c =>
-            ((string)c["value"]!, (string?)c[language] ?? (string?)c["en"] ?? (string)c["value"]!,
+            ((string)c["value"]!, (string?)c["en"] ?? (string)c["value"]!,
              S(c["description"]))).ToList();
     }
 
@@ -454,16 +421,6 @@ public partial class MainWindow : Window
     {
         switch (key)
         {
-            case "ui_language":
-            {
-                var choices = new List<(string, string, string)> { ("", T("system"), ""), ("ru", "Русский", ""), ("en", "English", ""),
-                                                                   ("pt_BR", "Português (Brasil)", ""), ("zh_CN", "简体中文", ""), ("fr_FR", "Français", "") };
-                return ChoiceCard(item, choices, store.Get(key), value =>
-                {
-                    store.Set(key, value);
-                    Dispatcher.BeginInvoke(ApplyLanguage);
-                });
-            }
             case "game_dir":
                 return FolderCard(item, key, null);
             case "user_dir":

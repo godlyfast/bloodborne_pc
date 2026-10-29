@@ -24,45 +24,38 @@ public partial class MainWindow
     private sealed record TrophyEntry(int Id, char Grade, bool Hidden, string Name, string Detail,
                                       bool Unlocked, string? Time, string? Icon);
 
-    private static readonly Dictionary<string, (string Ru, string En)> TrophyTexts = new()
+    private static readonly Dictionary<string, string> TrophyTexts = new()
     {
-        ["trophies"] = ("Трофеи", "Trophies"),
-        ["trophies_description"] = (
-            "Трофеи, полученные в этой папке сохранений. Названия, описания и значки игра берёт из своего " +
-            "пакета трофеев: для этого нужен ключ трофеев — тот же, что просит shadPS4.",
-            "The trophies earned in this saves folder. The game takes their names, descriptions and icons " +
-            "from its trophy package: that needs the trophy key, the same one shadPS4 asks for."),
-        ["key"] = ("Ключ трофеев", "Trophy key"),
-        ["key_description"] = ("32 шестнадцатеричные цифры. Хранится только в настройках лаунчера.",
-                               "32 hexadecimal digits. Kept in the launcher's settings only."),
-        ["key_bad"] = ("Нужно ровно 32 шестнадцатеричные цифры (0–9, A–F).",
-                       "Exactly 32 hexadecimal digits are needed (0-9, A-F)."),
-        ["progress"] = ("Прогресс", "Progress"),
-        ["none"] = ("Трофеев пока нет", "No trophies yet"),
-        ["none_description"] = ("Они появятся здесь после первого полученного в игре трофея.",
-                                "They show here once the game has awarded the first one."),
-        ["got_of"] = ("Получено {0} из {1}", "{0} of {1} earned"),
-        ["got"] = ("Получено: {0}", "Earned: {0}"),
-        ["unnamed"] = ("Названия неизвестны", "Names unknown"),
-        ["unnamed_description"] = ("Укажите ключ трофеев выше и запустите игру: она расшифрует названия и значки.",
-                                   "Enter the trophy key above and start the game: it decrypts the names and icons."),
-        ["number"] = ("Трофей №{0}", "Trophy #{0}"),
-        ["hidden"] = ("Скрытый трофей", "Hidden trophy"),
-        ["hidden_description"] = ("Откроется, когда будет получен", "Shown once earned"),
-        ["earned"] = ("Получен", "Earned"),
-        ["P"] = ("Платиновый", "Platinum"),
-        ["G"] = ("Золотой", "Gold"),
-        ["S"] = ("Серебряный", "Silver"),
-        ["B"] = ("Бронзовый", "Bronze"),
+        ["trophies"] = "Trophies",
+        ["trophies_description"] = "The trophies earned in this saves folder. The game takes their names, descriptions and icons " +
+            "from its trophy package: that needs the trophy key, the same one shadPS4 asks for.",
+        ["key"] = "Trophy key",
+        ["key_description"] = "32 hexadecimal digits. Kept in the launcher's settings only.",
+        ["key_bad"] = "Exactly 32 hexadecimal digits are needed (0-9, A-F).",
+        ["progress"] = "Progress",
+        ["none"] = "No trophies yet",
+        ["none_description"] = "They show here once the game has awarded the first one.",
+        ["got_of"] = "{0} of {1} earned",
+        ["got"] = "Earned: {0}",
+        ["unnamed"] = "Names unknown",
+        ["unnamed_description"] = "Enter the trophy key above and start the game: it decrypts the names and icons.",
+        ["number"] = "Trophy #{0}",
+        ["hidden"] = "Hidden trophy",
+        ["hidden_description"] = "Shown once earned",
+        ["earned"] = "Earned",
+        ["P"] = "Platinum",
+        ["G"] = "Gold",
+        ["S"] = "Silver",
+        ["B"] = "Bronze",
     };
 
-    private string TT(string key) => Translated(key, TrophyTexts[key].Ru, TrophyTexts[key].En);
+    private string TT(string key) => TrophyTexts[key];
 
     /// A card's title and description in the shape Card() takes (a schema item's texts).
     private JsonObject TrophyItem(string title, string description = "") => new()
     {
-        ["title"] = new JsonObject { [language] = title },
-        ["description"] = new JsonObject { [language] = description },
+        ["title"] = new JsonObject { ["en"] = title },
+        ["description"] = new JsonObject { ["en"] = description },
     };
 
     private string TrophyUserDir()

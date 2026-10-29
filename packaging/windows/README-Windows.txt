@@ -29,25 +29,3 @@ FileRepository\u0*\) together with the upscaler DLL. The recording runs on vkd3d
 DLSS (GeForce RTX): when bin\bbport_dlss.dll and bin\nvngx_dlss.dll are in the package, choose
 DLSS in the in-game menu (Insert) or the launcher; Frame Generation needs RTX 40/50 and
 bin\nvngx_dlssg.dll.
-
------------------------------------------------------------------------------------------------
-Bloodborne для Windows 10/11
-
-Нужен свой дамп Bloodborne (CUSA03173, версия 1.09) и видеокарта с Vulkan 1.3 и свежим драйвером.
-
-1. Распакуйте архив в любую папку (не в Program Files).
-2. Запустите Bloodborne.exe, выберите папку игры (где лежит eboot.bin), нажмите «Играть».
-3. В игре: Insert (или L3+R3) открывает меню настроек порта.
-
-Всё, что пишет порт, остаётся в этой папке: bbport.ini, user\ (сохранения), out\, logs\ (журнал
-каждого запуска). Для отчёта пришлите последний файл из logs\.
-
-В этой сборке только новая модель памяти. Если драйвер её не поддерживает, игра остановится при
-запуске со строкой "STOP: the GPU driver cannot use the game's memory in place" — пришлите журнал.
-
-Игра по сети: раздел лаунчера «Онлайн», два пула, как в Linux: Seamless Hunt (учётная запись
-shadNet с seamlesshunt.com, бесшовный кооператив BBSC) или The Hunter's Dream (вход через Discord);
-UPnP и проверка соединения. Модуль онлайна и его библиотеки — в папке online\ (bbnet20.dll):
-чтобы попробовать другую его сборку (новый BBSC), замените эту папку.
-Моды: раздел лаунчера «Моды и патчи» (каждый мод — в свою папку в mods\, порядок загрузки
-выбирается) и XML-патчи shadPS4 для 01.09 (patches\).
