@@ -51,22 +51,25 @@ int main() {
     s.menu_y = -1.0f;
     BbSettings::Load();
     assert(s.menu_x == 0.625f && s.menu_y == 0.125f && s.upscaler == BbSettings::UpscalerFsr411);
+    // A size chosen in a menu (0.7 starts at auto, the monitor's size).
     s.aspect = BbSettings::Aspect21x9;
+    s.output_auto = false;
     s.output_res = BbSettings::PackSize({2560, 1080});
     s.effects[7] = false;
     BbSettings::Save();
     s.aspect = BbSettings::Aspect16x9;
+    s.output_auto = true;
     s.output_res = BbSettings::PackSize(BbSettings::OutputDefault);
     s.effects[7] = true;
     BbSettings::Load();
-    assert(s.aspect == BbSettings::Aspect21x9);
+    assert(s.aspect == BbSettings::Aspect21x9 && !s.output_auto);
     assert((BbSettings::CurrentOutput() == BbSettings::OutputSize{2560, 1080}));
     assert(!s.effects[7]);
     assert((BbSettings::NearestOutput(BbSettings::Aspect16x10, {2560, 1080}) ==
             BbSettings::OutputSize{1680, 1050}));
 
-    // Frame generation: DLSS from the file stays; FSR 3.1 only with BB_FRAME_GEN (hidden until
-    // its artifacts are fixed); the environment wins; "1"/"0" of earlier versions still parse.
+    // Frame generation: DLSS and FSR 3.1 from the file stay (0.7 shows FSR 3.1 on every GPU); the
+    // environment wins; "1"/"0" of earlier versions still parse.
     const auto write_frame_gen = [&](const char* text) {
         FILE* file = std::fopen(path, "w");
         assert(file);
@@ -80,7 +83,7 @@ int main() {
     assert(s.frame_generation == BbSettings::FrameGenDlss && s.frame_generation_multiplier == 3);
     write_frame_gen("frame_generation=fsr3\nframe_generation_multiplier=9\n");
     BbSettings::Load();
-    assert(s.frame_generation == BbSettings::FrameGenOff && s.frame_generation_multiplier == 4);
+    assert(s.frame_generation == BbSettings::FrameGenFsr3 && s.frame_generation_multiplier == 4);
     setenv("BB_FRAME_GEN", "1", 1);
     BbSettings::Load();
     assert(s.frame_generation == BbSettings::FrameGenFsr3);
@@ -95,7 +98,7 @@ int main() {
     unsetenv("BB_FRAME_GEN_MULTIPLIER");
     write_frame_gen("frame_generation=1\n");
     BbSettings::Load();
-    assert(s.frame_generation == BbSettings::FrameGenOff); // FSR 3.1 without BB_FRAME_GEN
+    assert(s.frame_generation == BbSettings::FrameGenFsr3); // "1" of earlier versions
     s.frame_generation = BbSettings::FrameGenDlss;
     s.frame_generation_multiplier = 4;
     BbSettings::Save();
