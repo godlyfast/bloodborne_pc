@@ -213,8 +213,8 @@ static bool RejectClear(int reason, u32 dim_x) {
 /// BB_IMAGE_CLEAR_LOG=1: a clear shader whose target the texture cache holds in another format than
 /// the shader writes (BbClearFormat), once per address and pair of formats in a stretch of such
 /// clears. A stretch ends after a second without one (a load lies between, so a later load at an
-/// address already seen shows again) or when the outcome changes (switching experiment 512 shows
-/// at once).
+/// address already seen shows again) or when the outcome changes (switching the AllowMismatch
+/// experiment shows at once).
 static void NoteClearMismatch(const Gcn::Buffer& target, vk::Format requested, vk::Format created,
                               bool allowed) {
     static const bool log = bb_env_on("BB_IMAGE_CLEAR_LOG");
@@ -245,9 +245,11 @@ static void NoteClearMismatch(const Gcn::Buffer& target, vk::Format requested, v
             ? vk::to_string(requested)
             : fmt::format("Undefined (data format {} number format {})", u32(target.GetDataFmt()),
                           u32(target.GetNumberFmt()));
+    const std::string outcome =
+        allowed ? fmt::format("allowed by exp {}", BbClearFormat::AllowMismatch) : "rejected";
     std::printf("Image clear HLE: format mismatch at %#llx: game %s image %s (%s)\n",
                 (unsigned long long)address, game.c_str(),
-                vk::to_string(created).c_str(), allowed ? "allowed by exp 512" : "rejected");
+                vk::to_string(created).c_str(), outcome.c_str());
     if (++lines == MaxLines) {
         std::printf("Image clear HLE: %u format mismatch lines, no more are printed\n", MaxLines);
     }
@@ -357,7 +359,8 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
     // vkCmdClearColorImage writes the color in the image's create format, and the image found may
     // have been created in another one of the same size (R32Sfloat where the game now writes
     // R8G8B8A8Unorm, 2026-10-29: the SSR mask smeared the world). Only the format the shader
-    // writes is replaced; otherwise the shader runs (BbClearFormat). Experiment 512: as before.
+    // writes is replaced; otherwise the shader runs (BbClearFormat). Experiment AllowMismatch: as
+    // before.
     using BbClearFormat::Verdict;
     const vk::Format requested =
         GcnToVk::TrySurfaceFormat(target.GetDataFmt(), target.GetNumberFmt());
@@ -376,7 +379,7 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
     }
     const auto* color = reinterpret_cast<const float*>(value.base_address);
     // Equal formats are not yet equal bytes when the shader would reorder the components: logged
-    // only, so experiment 512 stays the one difference from before.
+    // only, so experiment AllowMismatch stays the one difference from before.
     NoteClearReorder(target, image.info.pixel_format, color);
     const vk::ClearValue clear{
         .color = {.float32 = std::array<float, 4>{color[0], color[1], color[2], color[3]}},

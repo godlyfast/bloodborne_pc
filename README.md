@@ -52,11 +52,9 @@ merge; 0.7 uses those bit values for its own experiments.
 **Compute-clear format check (2026-10-30):** the game's clear shader is replaced
 by a Vulkan clear only when the cached image was created in the format the shader
 writes (`gpu/shim/bbport_clear_format.h`); otherwise the shader runs. Experiment
-bit 512 (second number of `BB_TOGGLE_FILE`) restores the old replacement for A/B
-tests and `BB_IMAGE_CLEAR_LOG=1` logs mismatches. In 0.7 bit 512 also turns on
-upstream's write shadows (like `BB_WRITE_SHADOWS=1`), which act only where
-garlic memory is in VRAM (discrete GPUs by default); on integrated GPUs such as
-the ROG Ally the bit changes only the clear path.
+bit 32768 (second number of `BB_TOGGLE_FILE`) restores the old replacement for A/B
+tests and `BB_IMAGE_CLEAR_LOG=1` logs mismatches. Builds before the 0.7 merge used
+bit 512, which 0.7 now uses for its write shadows (like `BB_WRITE_SHADOWS=1`).
 
 **Thread identity:** guest mutex ownership stores only 40 bits of a thread
 handle. Upstream (since 0.6) allocates low, zeroed thread records in 256-KiB pools,

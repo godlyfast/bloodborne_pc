@@ -15,16 +15,15 @@
 namespace BbClearFormat {
 
 /// Experiment bit (the second number of BB_TOGGLE_FILE): the clear is replaced on an image of any
-/// format again, as before 2026-10-29, for a live A/B of the smear in one load. Upstream 0.7 reads
-/// the same bit for its write shadows (BufferCache::ShadowGpuWrites), which act only with garlic
-/// memory in VRAM (discrete GPUs by default): on integrated ones only this check changes.
-inline constexpr std::uint64_t AllowMismatch = 512;
+/// format again, as before 2026-10-29, for a live A/B of the smear in one load. 512 before the 0.7
+/// merge; 0.7 uses 512 for write shadows (buffer_write_tracking.cpp).
+inline constexpr std::uint64_t AllowMismatch = 32768;
 
 enum class Verdict {
     Replace,         ///< the image's create format is the one the shader writes
     Unmapped,        ///< the shader's data and number format have no Vulkan format: the shader runs
     Mismatch,        ///< the image was created in another format: the shader runs
-    ReplaceMismatch, ///< either of the two, replaced anyway (experiment 512)
+    ReplaceMismatch, ///< either of the two, replaced anyway (experiment AllowMismatch)
 };
 
 /// `requested`: the Vulkan format of the shader's target buffer (GcnToVk::TrySurfaceFormat of its

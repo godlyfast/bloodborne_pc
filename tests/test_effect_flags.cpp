@@ -64,9 +64,9 @@ int main() {
     std::puts("effect-flags: game AA context capability OK");
 
     // The compute clear's replacement (Rasterizer::IsComputeImageClear): only on an image created
-    // in the format the shader writes; experiment 512 replaces on any image again. The decision
-    // only: whether the texture cache hands back such an image, and what vkCmdClearColorImage
-    // writes into it, need the game (the A/B with bit 512).
+    // in the format the shader writes; experiment AllowMismatch replaces on any image again. The
+    // decision only: whether the texture cache hands back such an image, and what
+    // vkCmdClearColorImage writes into it, need the game (the A/B with that bit).
     {
         // VkFormat values; the zero value is VK_FORMAT_UNDEFINED, as for vk::Format.
         enum class Format : int {
@@ -91,13 +91,14 @@ int main() {
         // A pair without a Vulkan format: the shader runs, also on an image of no format.
         assert(decide(Format::Undefined, Format::R32Sfloat, false) == Verdict::Unmapped);
         assert(decide(Format::Undefined, Format::Undefined, false) == Verdict::Unmapped);
-        // Experiment 512: every one of them replaced, as before.
+        // Experiment AllowMismatch: every one of them replaced, as before.
         assert(decide(Format::R8G8B8A8Unorm, Format::R32Sfloat, true) == Verdict::ReplaceMismatch);
         assert(decide(Format::R8G8B8A8Unorm, Format::R8G8B8A8Srgb, true) ==
                Verdict::ReplaceMismatch);
         assert(decide(Format::Undefined, Format::R32Sfloat, true) == Verdict::ReplaceMismatch);
-        // The bit the live A/B toggled (2026-10-30).
-        static_assert(BbClearFormat::AllowMismatch == 512);
+        // The bit for live A/B tests: 32768 since the 0.7 merge (512 before it, which 0.7 uses for
+        // its write shadows).
+        static_assert(BbClearFormat::AllowMismatch == 32768);
         static_assert(BbClearFormat::Decide(Format::R32Sfloat, Format::R32Sfloat, false) ==
                       Verdict::Replace);
     }
