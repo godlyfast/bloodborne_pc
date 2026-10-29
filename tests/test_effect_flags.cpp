@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "bbport_effect_flags.h"
+#include "bbport_clear_format.h"
 
 #include <array>
 #include <cassert>
@@ -267,4 +268,46 @@ int main() {
         assert((frame(0) == Frame{1, 1, 1, 1}) && !BbEffectFlags::SsrPending(slot));
     }
     std::puts("effect-flags: SSR experiments OK");
+
+    // The compute clear's replacement (Rasterizer::IsComputeImageClear): only on an image created
+    // in the format the shader writes; experiment 512 replaces on any image again. The decision
+    // only: whether the texture cache hands back such an image, and what vkCmdClearColorImage
+    // writes into it, need the game (the A/B with bit 512).
+    {
+        // VkFormat values; the zero value is VK_FORMAT_UNDEFINED, as for vk::Format.
+        enum class Format : int {
+            Undefined = 0,
+            R8G8B8A8Unorm = 37,
+            R8G8B8A8Srgb = 43,
+            R32Sfloat = 100,
+        };
+        using BbClearFormat::Verdict;
+        const auto decide = [](Format requested, Format created, bool allow) {
+            return BbClearFormat::Decide(requested, created, allow);
+        };
+        // The smear (2026-10-29): R8G8B8A8Unorm written into an image created as R32Sfloat.
+        assert(decide(Format::R8G8B8A8Unorm, Format::R32Sfloat, false) == Verdict::Mismatch);
+        assert(decide(Format::R32Sfloat, Format::R8G8B8A8Unorm, false) == Verdict::Mismatch);
+        // Same size and class, another encoding: the Vulkan clear would encode sRGB.
+        assert(decide(Format::R8G8B8A8Unorm, Format::R8G8B8A8Srgb, false) == Verdict::Mismatch);
+        // The formats agree: replaced, whatever the bit.
+        assert(decide(Format::R8G8B8A8Unorm, Format::R8G8B8A8Unorm, false) == Verdict::Replace);
+        assert(decide(Format::R8G8B8A8Unorm, Format::R8G8B8A8Unorm, true) == Verdict::Replace);
+        assert(decide(Format::R32Sfloat, Format::R32Sfloat, false) == Verdict::Replace);
+        // A pair without a Vulkan format: the shader runs, also on an image of no format.
+        assert(decide(Format::Undefined, Format::R32Sfloat, false) == Verdict::Unmapped);
+        assert(decide(Format::Undefined, Format::Undefined, false) == Verdict::Unmapped);
+        // Experiment 512: every one of them replaced, as before.
+        assert(decide(Format::R8G8B8A8Unorm, Format::R32Sfloat, true) == Verdict::ReplaceMismatch);
+        assert(decide(Format::R8G8B8A8Unorm, Format::R8G8B8A8Srgb, true) ==
+               Verdict::ReplaceMismatch);
+        assert(decide(Format::Undefined, Format::R32Sfloat, true) == Verdict::ReplaceMismatch);
+        // Its bit is none of the SSR experiments' (the copy gate masks them, not this one).
+        static_assert((BbClearFormat::AllowMismatch & (BbEffectFlags::SsrHoldOff |
+                                                       BbEffectFlags::SsrUnlit |
+                                                       BbEffectFlags::SsrFreeze)) == 0);
+        static_assert(BbClearFormat::Decide(Format::R32Sfloat, Format::R32Sfloat, false) ==
+                      Verdict::Replace);
+    }
+    std::puts("effect-flags: image clear format check OK");
 }

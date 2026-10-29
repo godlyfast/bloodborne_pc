@@ -2,6 +2,8 @@
 // bbport render: Rasterizer, render targets: special passes (fast clear elimination, resolve, depth
 // copies), target lookup, the render pass (BeginRendering) and the UI placement.
 
+#include <tuple>
+
 #include "render/raster_internal.h"
 
 namespace Vulkan {
@@ -215,6 +217,36 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
     }
 }
 
+/// BB_IMAGE_CLEAR_LOG=1: a fast clear elimination on an image created in another format than the
+/// color buffer's, once per address and pair of formats. vkCmdClearColorImage writes the color in
+/// the create format, as the compute clear did before it ran the game's shader on such images
+/// (BbClearFormat, 2026-10-29); this one is only logged.
+static void NoteFastClearMismatch(VAddr address, vk::Format requested, vk::Format created) {
+    static const bool log = [] {
+        const char* env = std::getenv("BB_IMAGE_CLEAR_LOG");
+        return env && env[0] == '1';
+    }();
+    if (!log || requested == created) {
+        return;
+    }
+    static std::mutex mutex;
+    static std::set<std::tuple<VAddr, vk::Format, vk::Format>> told;
+    std::scoped_lock lock{mutex};
+    // Bounded: each load can move the targets to new addresses.
+    constexpr size_t MaxLines = 256;
+    if (told.size() >= MaxLines || !told.emplace(address, requested, created).second) {
+        return;
+    }
+    std::printf("Fast clear elimination: format mismatch at %#llx: game %s image %s (cleared in "
+                "the image format)\n",
+                (unsigned long long)address, vk::to_string(requested).c_str(),
+                vk::to_string(created).c_str());
+    if (told.size() == MaxLines) {
+        std::printf("Fast clear elimination: %zu format mismatch lines, no more are printed\n",
+                    MaxLines);
+    }
+}
+
 void Rasterizer::EliminateFastClear() {
     // The fast clear color is written where the CMASK says the target is still cleared.
     const auto& col_buf = Regs().color_buffers[0];
@@ -232,6 +264,12 @@ void Rasterizer::EliminateFastClear() {
         texture_cache.TouchMeta(cmask, slice, false);
     }
     const VAddr target = col_buf.Address();
+    // The color is built for the color buffer's format (ColorBufferClearValue); the image may have
+    // been created in another one of the same class (FindImage reuses it through a view).
+    // TryGetImage, not GetImage: the log does not touch the image for the collector.
+    if (const auto* image = texture_cache.TryGetImage(image_id, 0)) {
+        NoteFastClearMismatch(target, desc.info.pixel_format, image->info.pixel_format);
+    }
     ScopeMarker("EliminateFastClear:MRT={:#x}:M={:#x}", fmt::make_format_args(target, cmask), [&] {
                     runtime.ClearImage(&texture_cache.GetImage(image_id), desc.view_info.range,
                                        GcnToVk::ColorBufferClearValue(col_buf));

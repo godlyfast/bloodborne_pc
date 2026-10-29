@@ -4,6 +4,10 @@
 // their resources and replaced by the tracked metadata state or a Vulkan copy or clear (the
 // images live in their own Vulkan memory, not in the buffers the shader would write).
 
+#include <chrono>
+#include <tuple>
+
+#include "bbport_clear_format.h"
 #include "render/raster_internal.h"
 
 namespace Vulkan {
@@ -150,6 +154,100 @@ static bool RejectClear(int reason, u32 dim_x) {
     return false;
 }
 
+/// BB_IMAGE_CLEAR_LOG=1: a clear shader whose target the texture cache holds in another format than
+/// the shader writes (BbClearFormat), once per address and pair of formats in a stretch of such
+/// clears. A stretch ends after a second without one (a load lies between, so a later load at an
+/// address already seen shows again) or when the outcome changes (switching experiment 512 shows
+/// at once).
+static void NoteClearMismatch(const Gcn::Buffer& target, vk::Format requested, vk::Format created,
+                              bool allowed) {
+    static const bool log = [] {
+        const char* env = std::getenv("BB_IMAGE_CLEAR_LOG");
+        return env && env[0] == '1';
+    }();
+    if (!log) {
+        return;
+    }
+    const VAddr address = target.base_address; // a bit field: copied before it is forwarded
+    static std::mutex mutex;
+    static std::set<std::tuple<VAddr, vk::Format, vk::Format>> told;
+    static std::chrono::steady_clock::time_point last{};
+    static bool last_allowed = false;
+    static u32 lines = 0;
+    std::scoped_lock lock{mutex};
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last > std::chrono::seconds(1) || allowed != last_allowed) {
+        told.clear();
+    }
+    last = now;
+    last_allowed = allowed;
+    // Bounded: a line or two a load.
+    constexpr u32 MaxLines = 1024;
+    if (lines >= MaxLines || !told.emplace(address, requested, created).second) {
+        return;
+    }
+    // A pair without a Vulkan format: its numbers.
+    const std::string game =
+        requested != vk::Format::eUndefined
+            ? vk::to_string(requested)
+            : fmt::format("Undefined (data format {} number format {})", u32(target.GetDataFmt()),
+                          u32(target.GetNumberFmt()));
+    std::printf("Image clear HLE: format mismatch at %#llx: game %s image %s (%s)\n",
+                (unsigned long long)address, game.c_str(),
+                vk::to_string(created).c_str(), allowed ? "allowed by exp 512" : "rejected");
+    if (++lines == MaxLines) {
+        std::printf("Image clear HLE: %u format mismatch lines, no more are printed\n", MaxLines);
+    }
+}
+
+/// BB_IMAGE_CLEAR_LOG=1: a clear replaced although the port's shader would not store its color as
+/// it is. StoreBufferFormat stores the value through the inverse of the target's destination
+/// selects and converts it for a remapped number format; vkCmdClearColorImage writes the
+/// components in order. One of the two R8G8B8A8Unorm builds of cs 8b355b5a in the Ally's shader
+/// cache stores B, G, R, A (2026-10-29); which target it clears is not known. Logged only, once
+/// per address, selects and conversion.
+static void NoteClearReorder(const Gcn::Buffer& target, vk::Format created, const float* color) {
+    static const bool log = [] {
+        const char* env = std::getenv("BB_IMAGE_CLEAR_LOG");
+        return env && env[0] == '1';
+    }();
+    if (!log) {
+        return;
+    }
+    // The components the format stores (StoreBufferFormat): component i gets the value's
+    // component the inverse selects name.
+    const Gcn::CompMapping selects = target.DstSelect();
+    const Gcn::CompMapping store = selects.Inverse();
+    const u32 components = Gcn::NumComponents(target.GetDataFmt());
+    bool reordered = false;
+    for (u32 i = 0; i < components && i < 4; ++i) {
+        reordered |= u32(store.array[i]) != u32(Gcn::CompSwizzle::Red) + i;
+    }
+    const auto conversion = target.GetNumberConversion();
+    if (!reordered && conversion == Gcn::NumberConversion::None) {
+        return;
+    }
+    const VAddr address = target.base_address; // a bit field: copied before it is forwarded
+    const auto name = [](Gcn::CompSwizzle sel) { return "01??RGBA"[u32(sel) & 7]; };
+    const char text[5] = {name(selects.r), name(selects.g), name(selects.b), name(selects.a), 0};
+    const u32 key = u32(selects.r) | u32(selects.g) << 8 | u32(selects.b) << 16 |
+                    u32(selects.a) << 24;
+    static std::mutex mutex;
+    static std::set<std::tuple<VAddr, u32, u32>> told;
+    std::scoped_lock lock{mutex};
+    constexpr size_t MaxLines = 256;
+    if (told.size() >= MaxLines || !told.emplace(address, key, u32(conversion)).second) {
+        return;
+    }
+    std::printf("Image clear HLE: replaced at %#llx (%s, color %g %g %g %g) in component order, "
+                "but the shader stores dst_sel %s, number conversion %u\n",
+                (unsigned long long)address, vk::to_string(created).c_str(), color[0], color[1],
+                color[2], color[3], text, u32(conversion));
+    if (told.size() == MaxLines) {
+        std::printf("Image clear HLE: %zu dst_sel lines, no more are printed\n", MaxLines);
+    }
+}
+
 bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
     int reason = 0;
     if (!pipeline->IsCompute()) {
@@ -184,7 +282,30 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
         image.info.props.is_depth) {
         return RejectClear(++reason, cs.dim_x);
     }
+    // vkCmdClearColorImage writes the color in the image's create format, and the image found may
+    // have been created in another one of the same size (R32Sfloat where the game now writes
+    // R8G8B8A8Unorm, 2026-10-29: the SSR mask smeared the world). Only the format the shader
+    // writes is replaced; otherwise the shader runs (BbClearFormat). Experiment 512: as before.
+    using BbClearFormat::Verdict;
+    const vk::Format requested =
+        GcnToVk::TrySurfaceFormat(target.GetDataFmt(), target.GetNumberFmt());
+    const bool allow_mismatch = BbToggle::Experiment(BbClearFormat::AllowMismatch);
+    const Verdict verdict =
+        BbClearFormat::Decide(requested, image.info.pixel_format, allow_mismatch);
+    if (verdict != Verdict::Replace) {
+        const bool allowed = verdict == Verdict::ReplaceMismatch;
+        NoteClearMismatch(target, requested, image.info.pixel_format, allowed);
+        if (!allowed) {
+            // Check 7, its number written out: `reason` is still 0 here (each check above
+            // increments it only in its own return, so every earlier rejection reports 1, which
+            // is not logged).
+            return RejectClear(7, cs.dim_x);
+        }
+    }
     const auto* color = reinterpret_cast<const float*>(value.base_address);
+    // Equal formats are not yet equal bytes when the shader would reorder the components: logged
+    // only, so experiment 512 stays the one difference from before.
+    NoteClearReorder(target, image.info.pixel_format, color);
     const vk::ClearValue clear{
         .color = {.float32 = std::array<float, 4>{color[0], color[1], color[2], color[3]}},
     };
