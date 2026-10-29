@@ -75,6 +75,23 @@ New folders are enabled automatically and appended at the end in alphabetical or
 `BB_MODS_CONFIG` changes the profile path. `BB_MOD_TRACE=1` with `BB_MODS_DIR` prints
 the first reads of the actually connected files for diagnostics.
 
+# Texture packs
+
+Packs with enlarged map textures do not fit in the game's graphics heaps, which are sized for
+the PS4 (2287 and 886 MiB). When a heap is full, the game's GPU memory allocations fail:
+textures flicker, then the game crashes (code 139 in Iosefka's Clinic, behind which the
+Forbidden Woods is streamed in, #240). Launching detects such a pack by itself, both one
+connected from the mods folder and one already written into the game folder: a map texture
+larger than 4096 pixels on a side (retail 1.09 has none). Then the `Increased Graphics Heap Sizes`
+patch is applied (heaps of 3952 and 2560 MiB, as with the patches for resolutions above 1080p)
+and 9152 MiB of direct memory, roughly 3.3 GB more RAM. In the log:
+`Graphics heaps: larger (a texture pack: dvdroot_ps4/map/m24/m24_0000.tpfbhd has 8192-pixel textures, ...)`.
+
+The first check reads about 8600 entries of the map texture archives (a fraction of a second on
+an SSD); the answer is kept in `out/texture-pack.json` until the texture files change.
+`BB_LARGE_HEAPS=1` always enables the large heaps (for a pack the check does not recognise: for
+example, one that enlarged textures to no more than 4096), `BB_LARGE_HEAPS=0` disables them.
+
 # Third-party patches (shadPS4 XML)
 
 The `patches/` folder in the data directory (in the AppImage — `~/.local/share/bbport/patches/`; in the launcher,

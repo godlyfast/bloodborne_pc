@@ -1,4 +1,7 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include "bbport_map_near.h"
+#include "shim/bb_env.h"
 #include "common/types.h"
 #include "bbport_game_menu.h"
 
@@ -17,6 +20,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include <SDL3/SDL_events.h>
 
 #include "bbport_guest_hooks.h"
 #include "bbport_settings.h"
@@ -148,7 +152,7 @@ const char16_t* TextOf(u32 id) {
 
 // ---- The port's values the game's rows edit (ints: the list rows bind ints). ----
 enum Field : int {
-    Aspect, OutputRes, Upscaler, Preset, Sharpness, ModelLod, FirstEffect, FieldCount = FirstEffect + BbSettings::EffectCount
+    Aspect, OutputRes, Upscaler, Preset, Sharpness, ModelLod, TextureQuality, FirstEffect, FieldCount = FirstEffect + BbSettings::EffectCount
 };
 int values[FieldCount];  // what the game's rows show and change (list rows bind ints)
 u8 bytes[FieldCount];    // the same for toggle and slider rows (they bind bytes)
@@ -204,6 +208,7 @@ void Fill(const BbSettings::Values& s, int* values) {
     for (int i = 0; i < 4; ++i) {
         if (LodValues[i] == s.model_lod) values[ModelLod] = i;
     }
+    values[TextureQuality] = std::clamp(int(s.texture_quality), 0, BbSettings::TqCount - 1);
     for (int e = 0; e < BbSettings::EffectCount; ++e) {
         values[FirstEffect + e] = s.effects[e];
     }
@@ -239,6 +244,9 @@ struct Page {
     std::vector<Row> rows; ///< at most the layout's
 };
 std::vector<Page> pages;
+// "Exit to desktop" in the System menu (the title screen's too): a Quit Game to the desktop, as PC
+// games have (Discord requests 2026-10-21; the Nexus mod "Just Exit Game" did it until now).
+u32 exit_name = 0, exit_help = 0;
 
 void DefineTexts() {
     const u32 off = AddText("Off"), on = AddText("On");
@@ -277,8 +285,8 @@ void DefineTexts() {
             std::move(outputs), Kind::Select);
     }
     row(Upscaler, "Upscaler", "Temporal upscaler and anti-aliasing",
-        {off, AddText("FSR 3.1"), AddText("FSR 4"), AddText("FSR 4.1.1"),
-         AddText("TAA"), AddText("DLSS")},
+        {off, AddText("FSR 3.1"), AddText("FSR 4"), AddText("FSR 4.1.1"), AddText("TAA"),
+         AddText("DLSS"), AddText("FSR 1"), AddText("FSR 4 (AMD DLL)")},
         Kind::Select);
     row(Preset, "Quality preset", "Scene resolution relative to the output",
         {AddText("Native AA"), AddText("Quality"), AddText("Balanced"),
@@ -288,8 +296,14 @@ void DefineTexts() {
     row(ModelLod, "Model detail", "Level of detail of models (after a restart)",
         {AddText("Highest"), AddText("Game default"), AddText("Lower"), AddText("Lowest")},
         Kind::Select);
+    row(TextureQuality, "Texture quality",
+        "Large textures in VRAM: half or a quarter of their size (from the next area); auto: half "
+        "with 3 GB of VRAM or less",
+        {AddText("Auto"), AddText("Full"), AddText("Half"), AddText("Quarter")},
+        Kind::Select);
 
-    page("Effects", "The game's effects (bbport; live except SSR reflections)", ControlsLayout);
+    page("Effects", "The game's effects (bbport): aberration and DoF at once, the rest at the next load",
+         ControlsLayout);
 
     // Short names for the game's narrow name column (BbSettings::Effects order); the help line
     // has the details.
@@ -300,10 +314,10 @@ void DefineTexts() {
     static const Short shorts[] = {
         {"effect_chromatic_aberration", "Chromatic aberration", "Colour fringes at the frame edges"},
         {"effect_dof", "Depth of field", "Blur of distant and near objects (DoF)"},
-        {"effect_motion_blur", "Motion blur", "Blur when the camera turns"},
-        {"effect_ssao", "Ambient occlusion", "Shading in corners and contacts (SSAO)"},
+        {"effect_motion_blur", "Motion blur", "Blur when the camera turns (from the next load)"},
+        {"effect_ssao", "Ambient occlusion", "Shading in corners and contacts (SSAO; from the next load)"},
         {"effect_game_aa", "Game's own AA", "The game's own anti-aliasing", false},
-        {"effect_dynamic_shadows", "Dynamic shadows", "Shadows from dynamic lights"},
+        {"effect_dynamic_shadows", "Dynamic shadows", "Shadows from dynamic lights (from the next load)"},
         {"effect_ssr", "SSR reflections", "Screen-space reflections (not in the original)"},
         {"skip_intro", "Skip intros", "Skip the startup logos and intro", false},
         {"debug_camera", "Free camera", "Toggled with Cross + L3", false},
@@ -324,6 +338,8 @@ void DefineTexts() {
                                  (live ? "" : " (after a restart)");
         row(Field(FirstEffect + e), name ? name->en : effect.label, help.c_str(), toggle);
     }
+    exit_name = AddText("Exit to desktop");
+    exit_help = AddText("Closes the game, as its window's close button does");
 }
 
 // ---- The game's structures, as its own code builds them. ----
@@ -381,6 +397,7 @@ bool UpscalerAvailable(int i) {
     return i == BbSettings::UpscalerFsr4     ? s.fsr4_supported.load()
            : i == BbSettings::UpscalerFsr411 ? s.fsr411_supported.load()
            : i == BbSettings::UpscalerDlss   ? s.dlss_supported.load()
+           : i == BbSettings::UpscalerFsrAmd ? s.fsr_amd_supported.load()
                                              : true;
 }
 
@@ -507,6 +524,15 @@ template <int P>
 void* PS4_SYSV_ABI PageFactory(void* out, void* arg) {
     return Factory(out, arg, reinterpret_cast<void*>(&Content<P>), P);
 }
+/// "Exit to desktop": the window's quit (gpu/shim/window.cpp ends the game), and a page for the
+/// menu meanwhile (it expects one).
+void* PS4_SYSV_ABI QuitFactory(void* out, void* arg) {
+    std::printf("Game menu: exit to desktop\n");
+    SDL_Event event{};
+    event.type = SDL_EVENT_QUIT;
+    SDL_PushEvent(&event);
+    return Factory(out, arg, reinterpret_cast<void*>(&Content<0>), 0);
+}
 constexpr std::size_t MaxPages = 6;
 void* const factories[MaxPages] = {
     reinterpret_cast<void*>(&PageFactory<0>), reinterpret_cast<void*>(&PageFactory<1>),
@@ -534,10 +560,7 @@ std::atomic<const void*> screen_sound_text{nullptr};
 const char16_t* PS4_SYSV_ABI LookupHook(void* repository, u32 table, u32 category, u32 id) {
     if (OurText(id)) {
         // BB_GAME_MENU_TRACE=1: how often the game asks for our texts (per 2 s).
-        static const bool count = [] {
-            const char* env = std::getenv("BB_GAME_MENU_TRACE");
-            return env && env[0] == '1';
-        }();
+        static const bool count = bb_env_on("BB_GAME_MENU_TRACE");
         if (count) {
             static std::atomic<u64> lookups{0};
             static std::atomic<long long> printed{0};
@@ -560,10 +583,7 @@ const char16_t* PS4_SYSV_ABI LookupHook(void* repository, u32 table, u32 categor
     const char16_t* text = lookup_original(repository, table, category, id);
     // BB_MSG_TRACE=1 (diagnostics): the game's text lookups per 2 s by category, with an example
     // id and caller and its text (which menu is on screen, issue #255).
-    static const bool msg_trace = [] {
-        const char* env = std::getenv("BB_MSG_TRACE");
-        return env && env[0] == '1';
-    }();
+    static const bool msg_trace = bb_env_on("BB_MSG_TRACE");
     if (msg_trace) {
         struct Seen {
             u64 count = 0;
@@ -597,10 +617,7 @@ const char16_t* PS4_SYSV_ABI LookupHook(void* repository, u32 table, u32 categor
             seen.clear();
         }
     }
-    static const bool trace = [] {
-        const char* env = std::getenv("BB_GAME_MENU_TRACE");
-        return env && env[0] == '1';
-    }();
+    static const bool trace = bb_env_on("BB_GAME_MENU_TRACE");
     if (trace && id >= 110000 && id < 120000) {
         std::printf("Game menu: text %#x/%u%s from %#llx\n", category, id, building_page >= 0 ? " (our page)" : "",
                     (unsigned long long)(reinterpret_cast<u64>(__builtin_return_address(0)) - image_base));
@@ -633,6 +650,9 @@ void* PS4_SYSV_ABI AddHook(void* menu, void* pair, void* function, void* out) {
     if (screen_sound && *reinterpret_cast<const void* const*>(pair) == screen_sound) {
         for (std::size_t i = 0; i < pages.size() && i < MaxPages; ++i) {
             AddItem(menu, pages[i].name, pages[i].help, factories[i]);
+        }
+        if (exit_name) {
+            AddItem(menu, exit_name, exit_help, reinterpret_cast<void*>(&QuitFactory));
         }
     }
     return result;
@@ -677,22 +697,14 @@ bool Detour(unsigned char* image, u64 va, const u8* prologue, std::size_t length
 /// A mapping within +-2 GiB of the image, for rel32 jumps both ways.
 u8* MapNear(unsigned char* image, u64 image_size, std::size_t size) {
     const u64 base = reinterpret_cast<u64>(image);
-    for (u64 k = 1; k <= 64; ++k) {
-        for (const u64 hint : {base - k * (24ull << 20), base + image_size + k * (24ull << 20)}) {
-            void* p = mmap(reinterpret_cast<void*>(hint), size, PROT_READ | PROT_WRITE,
-                           MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
-            if (p != MAP_FAILED) {
-                return static_cast<u8*>(p);
-            }
-        }
-    }
-    return nullptr;
+    return static_cast<u8*>(BbMapNear::Map(base, base + image_size, size, PROT_READ | PROT_WRITE,
+                                           24ull << 20, "Game menu"));
 }
 
 } // namespace
 
 void PatchImage(unsigned char* image, std::uint64_t size) {
-    if (const char* env = std::getenv("BB_GAME_MENU"); env && env[0] == '0') {
+    if (bb_env_off("BB_GAME_MENU")) {
         return;
     }
     image_base = reinterpret_cast<u64>(image);
@@ -771,9 +783,11 @@ void Poll() {
         // aspect ratio's sizes, RefreshOutputRow).
         const int aspect = std::clamp(now_values[Aspect], 0, BbSettings::AspectCount - 1);
         s.output_res = BbSettings::PackSize(MenuOutput(aspect, now_values[OutputRes]));
+        s.output_auto = false;
         s.aspect = aspect;
     } else if (now_values[OutputRes] != applied[OutputRes]) {
         s.output_res = BbSettings::PackSize(MenuOutput(s.aspect, now_values[OutputRes]));
+        s.output_auto = false;
     }
     const int upscaler = std::clamp(now_values[Upscaler], 0, BbSettings::UpscalerCount - 1);
     s.upscaler = UpscalerAvailable(upscaler) ? upscaler : int(BbSettings::UpscalerFsr3);
@@ -783,8 +797,14 @@ void Poll() {
         s.sharpness = std::clamp(now_values[Sharpness], 0, SharpnessSteps - 1) * SharpnessStep;
     }
     s.model_lod = LodValues[std::clamp(now_values[ModelLod], 0, 3)];
+    s.texture_quality = std::clamp(now_values[TextureQuality], 0, BbSettings::TqCount - 1);
     for (int e = 0; e < BbSettings::EffectCount; ++e) {
         s.effects[e] = now_values[FirstEffect + e] != 0;
+    }
+    // The game's AA switch here sets the anti-aliasing choice (the overlay has all of them).
+    const int game_aa = FirstEffect + BbSettings::GameAaEffect;
+    if (now_values[game_aa] != applied[game_aa]) {
+        s.anti_aliasing = now_values[game_aa] ? int(BbSettings::AaGame) : int(BbSettings::AaOff);
     }
     BbGuestHooks::ApplyGameEffects();
     std::memcpy(applied, now_values, sizeof(now_values));

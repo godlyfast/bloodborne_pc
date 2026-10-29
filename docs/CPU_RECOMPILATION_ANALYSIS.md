@@ -19,7 +19,7 @@ QEMU is used only in ARM64 tests.
 
 ## Exact binary analyzed
 
-- Source: `/home/deadinside/Games/bloodborne/game_files/CUSA03173/eboot.bin`.
+- Source: `game_files/CUSA03173/eboot.bin`.
 - Edition: `CUSA03173`, APP_VER `01.09`.
 - Original SELF SHA-256: `d65f0b4f01d59166aed16f8604196d8b7dd805abbf0758b356e8f1354c9429f9`.
 - Loadable-image SHA-256: `071df19c8880086d97182dbc057bc8cb37badaca57d9112683836b24a0444c0a`.

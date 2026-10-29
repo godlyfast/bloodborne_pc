@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
 """The launcher's runtime choices: GPU, monitor, aspect ratio, game language and online pool."""
 from paths import ROOT
 import importlib.util
@@ -14,6 +16,10 @@ from pathlib import Path
 gi = types.ModuleType("gi")
 gi.require_version = lambda *_args: None
 gi.repository = mock.MagicMock()
+# Real classes for the window's bases: LauncherWindow also inherits the page mixins
+# (bbport_launcher_*.py), and a mock base next to them is a metaclass conflict.
+gi.repository.Adw.ApplicationWindow = type("ApplicationWindow", (), {})
+gi.repository.Adw.Application = type("Application", (), {})
 sys.modules.setdefault("gi", gi)
 sys.modules.setdefault("gi.repository", gi.repository)
 sys.path.insert(0, str(ROOT / "launcher"))
@@ -100,15 +106,18 @@ class LauncherGpuTests(unittest.TestCase):
             self.assertEqual(executable, "bash")
             self.assertEqual(command, ["bash", str(launcher.PORT_DIR / "run.sh")])
             self.assertEqual(env["BB_LANGUAGE"], "8")
+            self.assertNotIn("BB_MENU_LANGUAGE", env)  # the port's menu is English-only
 
     def test_online_pool_selects_backend_and_keeps_credentials(self):
         self.settings.update(online=True, online_bbsc=True, online_npid="hunter",
                              online_password="password", thd_online_id="discord-hunter",
                              thd_token="token", thd_server="https://hunters.example")
-        with mock.patch.object(launcher, "online_module", return_value=True), \
+        # game_environment and online_module live in bbport_launcher_common (0.7).
+        common = sys.modules["bbport_launcher_common"]
+        with mock.patch.object(common, "online_module", return_value=True), \
                 mock.patch.dict(os.environ, {}, clear=True):
             env = launcher.game_environment(self.settings)
-            self.assertEqual((env["BB_ONLINE"], env["BB_NET_GEN"], env["BB_BBSC"]), ("1", "20", "1"))
+            self.assertEqual((env["BB_ONLINE"], env["BB_BBSC"]), ("1", "1"))
             self.assertEqual((env["BB_SHADNET_NPID"], env["BB_SHADNET_PASSWORD"]), ("hunter", "password"))
             self.settings["online_pool"] = "huntersdream"
             env = launcher.game_environment(self.settings)

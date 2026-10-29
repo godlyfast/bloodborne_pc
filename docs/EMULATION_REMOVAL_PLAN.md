@@ -121,7 +121,7 @@ Done:
   (61k writes per second). Labels with an interrupt are still signaled from the CPU (the
   interrupt comes from there). The same for `RELEASE_MEM` labels of compute queues. EOS with a
   write from GDS — a GPU copy in stream order instead of `Finish()` and a CPU read.
-- **Game code hooks without traps** (`gpu/shim/bbport_guest_hooks.cpp`, `BB_GUEST_HOOK_TRAPS=1`
+- **Game code hooks without traps** (`gpu/games/bloodborne/hooks.cpp`, `BB_GUEST_HOOK_TRAPS=1`
   — `int3` traps): the entry points of the loaders, the range allocator, and the GPU heap jump
   into stubs next to the image, which call the handler and execute the displaced instructions;
   loader `memcpy` calls go through a trampoline. Previously every call was a kernel signal

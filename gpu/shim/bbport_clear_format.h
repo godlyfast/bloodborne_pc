@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 bbport contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: whether a clear shader (cs 8b355b5a) may be replaced by a Vulkan clear of the image the
 // texture cache holds at its target (Rasterizer::IsComputeImageClear). vkCmdClearColorImage writes
@@ -14,7 +15,9 @@
 namespace BbClearFormat {
 
 /// Experiment bit (the second number of BB_TOGGLE_FILE): the clear is replaced on an image of any
-/// format again, as before 2026-10-29, for a live A/B of the smear in one load.
+/// format again, as before 2026-10-29, for a live A/B of the smear in one load. Upstream 0.7 reads
+/// the same bit for its write shadows (BufferCache::ShadowGpuWrites), which act only with garlic
+/// memory in VRAM (discrete GPUs by default): on integrated ones only this check changes.
 inline constexpr std::uint64_t AllowMismatch = 512;
 
 enum class Verdict {
