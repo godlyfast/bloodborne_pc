@@ -61,8 +61,12 @@ int main(int argc, char** argv) {
     entries[DstPage+1]=guest.bda+Page; entries[DstPage+1+GuestTable]=guest.bda+Page;
     // DstPage+2 is unmapped even though the descriptor includes it.
     auto* record=static_cast<u32*>(records.mapped);
+    // Guest addresses inside the page table's window (Shader::PageTableBase): the table's entry
+    // for a page is its index from the window's start, and addresses outside read as unmapped.
     const auto put_record=[&](u32 at,u32 base,u32 size,bool through) {
-        const u32 words[8]={base,0,size,u32(through),u32(trash.bda),u32(trash.bda>>32),GuestTable,0};
+        const u64 address=PageTableBase+base;
+        const u32 words[8]={u32(address),u32(address>>32),size,u32(through),u32(trash.bda),
+                            u32(trash.bda>>32),GuestTable,0};
         std::memcpy(record+at,words,sizeof(words));
     };
     put_record(0,SrcPage*Page,Page,false);
