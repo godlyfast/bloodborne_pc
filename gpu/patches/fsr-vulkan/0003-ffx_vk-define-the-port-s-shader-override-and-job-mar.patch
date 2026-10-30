@@ -1,0 +1,103 @@
+From 722b1786883013dab208f604840502fb18e5ef76 Mon Sep 17 00:00:00 2001
+From: Tim <godlyfast@gmail.com>
+Date: Fri, 30 Oct 2026 12:48:52 +0200
+Subject: [PATCH] ffx_vk: define the port's shader override and job mark hooks
+
+bbport assigns two function pointers that this backend has to define and
+call (gpu/upscale/ffx_shaders.cpp, gpu/upscale/fg_profile.cpp):
+
+- ffxVkShaderOverride(effect, pass, permutationOptions, &words, &size):
+  CreatePipelineVK asks it after fetching the packaged permutation blob.
+  When it returns true with non-empty SPIR-V (size in bytes, a multiple of
+  four), the compute pipeline is built from that code; the pipeline layout
+  and bindings still come from the packaged blob. Otherwise the packaged
+  code is used.
+- ffxVkJobMark(x, y, z): called right before each compute dispatch is
+  recorded, with the thread group counts (0, 0, 0 for an indirect dispatch,
+  whose counts are in a GPU buffer).
+
+Both are null by default; while null the backend behaves as before.
+---
+ .../ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp  | 41 ++++++++++++++++++-
+ 1 file changed, 39 insertions(+), 2 deletions(-)
+
+diff --git a/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp b/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
+index 5d7dbcf..f7ede56 100644
+--- a/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
++++ b/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
+@@ -71,6 +71,21 @@ static VkDeviceContext sVkDeviceContext = {};
+ // Constant buffer allocation callback
+ static FfxConstantBufferAllocator s_fpConstantAllocator = nullptr;
+ 
++// bbport: two hooks the port installs (gpu/upscale/ffx_shaders.cpp, gpu/upscale/fg_profile.cpp).
++// Both start null, and while null the backend does exactly what it did without them.
++// - ffxVkShaderOverride: asked for each compute pipeline (FfxEffect, pass, permutation options).
++//   Returning true with non-empty SPIR-V (`size` in bytes) builds the pipeline from that code instead
++//   of the packaged blob's; the bindings still come from the packaged blob, so the port's code must
++//   declare the same resources.
++// - ffxVkJobMark: called right before each compute dispatch is recorded, with its thread group
++//   counts (0, 0, 0 for an indirect dispatch: its counts are in a GPU buffer).
++// A linkage block, not `extern "C" T name = ...;`: initializing a variable declared extern warns.
++extern "C" {
++bool (*ffxVkShaderOverride)(uint32_t effect, uint32_t pass, uint32_t permutationOptions,
++                            const uint32_t** words, size_t* size) = nullptr;
++void (*ffxVkJobMark)(uint32_t x, uint32_t y, uint32_t z) = nullptr;
++}
++
+ // Offset the binding of samplers to avoid collisions
+ constexpr uint32_t SAMPLER_BINDING_SHIFT = 1000;
+ 
+@@ -3379,6 +3394,22 @@ FfxErrorCode CreatePipelineVK(FfxInterface* backendInterface,
+     backendInterface->fpGetPermutationBlobByIndex(effect, pass, FFX_BIND_COMPUTE_SHADER_STAGE, permutationOptions, &shaderBlob);
+     FFX_ASSERT(shaderBlob.data && shaderBlob.size);
+ 
++    // bbport: the port's own SPIR-V for this permutation, when it has one (ffxVkShaderOverride).
++    // Only the code changes: the layout and bindings below are still the packaged blob's.
++    const uint32_t* shaderCode     = (const uint32_t*)shaderBlob.data;
++    size_t          shaderCodeSize = shaderBlob.size;
++    if (ffxVkShaderOverride)
++    {
++        const uint32_t* overrideCode     = nullptr;
++        size_t          overrideCodeSize = 0;
++        if (ffxVkShaderOverride((uint32_t)effect, (uint32_t)pass, permutationOptions, &overrideCode, &overrideCodeSize) &&
++            overrideCode && overrideCodeSize && overrideCodeSize % sizeof(uint32_t) == 0)
++        {
++            shaderCode     = overrideCode;
++            shaderCodeSize = overrideCodeSize;
++        }
++    }
++
+     //////////////////////////////////////////////////////////////////////////
+     // One root signature (or pipeline layout) per pipeline
+     FFX_ASSERT_MESSAGE(effectContext.nextPipelineLayout < (effectContextId * FFX_MAX_PASS_COUNT) + FFX_MAX_PASS_COUNT, "FFXInterface: Vulkan: Ran out of pipeline layouts. Please increase FFX_MAX_PASS_COUNT");
+@@ -3736,8 +3767,8 @@ FfxErrorCode CreatePipelineVK(FfxInterface* backendInterface,
+     VkShaderModule shaderModule = VK_NULL_HANDLE;
+     VkShaderModuleCreateInfo shaderModuleCreateInfo = {};
+     shaderModuleCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+-    shaderModuleCreateInfo.pCode = (uint32_t*)shaderBlob.data;
+-    shaderModuleCreateInfo.codeSize = shaderBlob.size;
++    shaderModuleCreateInfo.pCode = shaderCode;
++    shaderModuleCreateInfo.codeSize = shaderCodeSize;
+ 
+     if (backendContext->vkFunctionTable.vkCreateShaderModule(backendContext->device, &shaderModuleCreateInfo, nullptr, &shaderModule) != VK_SUCCESS) {
+         return FFX_ERROR_BACKEND_API_ERROR;
+@@ -4097,10 +4128,16 @@ static FfxErrorCode executeGpuJobCompute(BackendContext_VK*    backendContext,
+     {
+         const uint32_t resourceIndex = job->computeJobDescriptor.cmdArgument.internalIndex;
+         VkBuffer buffer = backendContext->pResources[resourceIndex].bufferResource;
++        // bbport: the group counts are in the argument buffer, not known here.
++        if (ffxVkJobMark)
++            ffxVkJobMark(0, 0, 0);
+         backendContext->vkFunctionTable.vkCmdDispatchIndirect(vkCommandBuffer, buffer, job->computeJobDescriptor.cmdArgumentOffset);
+     }
+     else
+     {
++        // bbport: e.g. a timestamp before the dispatch (BB_FG_PROFILE).
++        if (ffxVkJobMark)
++            ffxVkJobMark(job->computeJobDescriptor.dimensions[0], job->computeJobDescriptor.dimensions[1], job->computeJobDescriptor.dimensions[2]);
+         backendContext->vkFunctionTable.vkCmdDispatch(vkCommandBuffer, job->computeJobDescriptor.dimensions[0], job->computeJobDescriptor.dimensions[1], job->computeJobDescriptor.dimensions[2]);
+     }
+ 
+-- 
+2.56.0
+
