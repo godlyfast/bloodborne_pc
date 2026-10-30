@@ -43,6 +43,29 @@ void runtime_wait_report(double) {}
 void runtime_sleep_stats(uint64_t* calls, uint64_t* ns) { *calls = 0; *ns = 0; }
 uint64_t runtime_heap_growths() { return 0; }
 }
+// 0.7's guest memory pool, growing heap and save slot (src/runtime_memory/*.c, src/runtime_file.c).
+// Hook and setting registrations are kept no-ops, as above; no memfd pool (runtime_memory.c's -1),
+// no trap time; everything that would touch guest memory or the save aborts.
+extern "C" {
+const char* runtime_file_user_dir(void) { std::abort(); }
+int runtime_savedata_active_slot(char*, size_t) { std::abort(); }
+void* runtime_low_map(size_t, int) { std::abort(); }
+int runtime_memory_pool_fd(void) { return -1; }
+void runtime_memory_trap_stats(uint64_t* wait_ns, uint64_t* apply_ns, uint64_t* calls, uint64_t* bytes) {
+    *wait_ns = 0; *apply_ns = 0; *calls = 0; *bytes = 0;
+}
+void runtime_memory_set_guest_chunk_private(int (*)(uint64_t, uint64_t, void*)) {}
+void runtime_memory_set_guest_chunk_free(void (*)(uint64_t, uint64_t)) {}
+void runtime_memory_set_guest_lazy(int) {}
+void runtime_memory_set_grow(const uint64_t*, uint64_t) {}
+void runtime_memory_set_host_only_allocations(uint64_t) {}
+int runtime_memory_deferred(uint64_t*, uint64_t*) { std::abort(); }
+int runtime_memory_commit(uint64_t, uint64_t) { std::abort(); }
+void runtime_memory_commit_ahead(uint64_t, uint64_t) { std::abort(); }
+int runtime_memory_decommit(uint64_t, uint64_t) { std::abort(); }
+void runtime_memory_discard_direct(uint64_t, uint64_t) { std::abort(); }
+void runtime_memory_note_pinned(uint64_t, uint64_t) { std::abort(); }
+}
 // Input prompts and reverse-engineering watches (no pad, no game files here).
 extern "C" {
 int runtime_pad_prompt_device() { return 0; }

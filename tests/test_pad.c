@@ -12,8 +12,6 @@ int bbgpu_mouse_captured(void) { return 0; }
 void bbgpu_mouse_look_enable(int enabled) { (void)enabled; }
 void bbgpu_mouse_capture(void) {}
 int bbgpu_camera_look(float yaw, float pitch) { (void)yaw; (void)pitch; return 0; }
-int bbgpu_free_camera(void) { return 0; }
-int bbgpu_pointer_wanted(void) { return 0; }
 void bbgpu_filter_pad(uint32_t *buttons, const uint8_t *sticks) { (void)buttons; (void)sticks; }
 int bbgpu_pointer_wanted(void) { return 0; }
 /* The game's image is not mapped here: the mouse's auto-rotation hold leaves its code alone. */
